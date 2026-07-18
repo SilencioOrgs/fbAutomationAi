@@ -1,0 +1,15 @@
+Use the uploaded image as the exact design template. Preserve the layout, typography, spacing, black textured background, electric yellow accents, and minimalist editorial aesthetic.
+
+Create a "Did You Know?" post about {TOPIC}.
+
+Headline: DID YOU KNOW?
+
+Body: {FACT_TEXT}
+
+Highlight {HIGHLIGHT_1} and {HIGHLIGHT_2} in electric yellow.
+
+Replace the right-side graphic with a photorealistic {SUBJECT} that matches the topic. It should have realistic details, soft natural lighting, and a natural pose facing slightly toward the text. Blend the subject into the dark background using subtle cracks, glitch textures, dust particles, and a faint electric-yellow rim light while keeping the subject completely realistic.
+
+Keep the overall design clean, premium, high-contrast, and easy to read with plenty of negative space.
+
+Negative prompt: cartoon, vector, CGI, painting, anime, low quality, blurry, cluttered background, distorted anatomy, extra subjects, oversaturated colors, incorrect text.

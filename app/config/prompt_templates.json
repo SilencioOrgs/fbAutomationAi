@@ -1,0 +1,25 @@
+{
+    "topic_generation": {
+        "system_prompt": "You are a social media content strategist specializing in creating viral Facebook content.",
+        "user_prompt": "Generate {count} unique, engaging Facebook post topic ideas for the niche: {niche}. Each topic should be specific enough to write a full post about. Return ONLY a valid JSON array of strings, no markdown formatting, no extra text. Example: [\"topic 1\", \"topic 2\"]",
+        "niche": "technology and AI",
+        "default_count": 3
+    },
+    "content_generation": {
+        "system_prompt": "You are a professional Facebook content writer who creates highly engaging posts optimized for reach and interaction.",
+        "user_prompt": "Write a Facebook post for this topic: {topic}. Return ONLY a valid JSON object with these keys: \"title\" (short, attention-grabbing headline), \"description\" (2-3 paragraph engaging post body), \"hashtags\" (array of 5-8 relevant hashtag strings without the # symbol), \"fact_text\" (a short interesting fact about the topic, max 2 sentences), \"highlight_1\" (a 2-3 word phrase from fact_text to highlight), \"highlight_2\" (another 2-3 word phrase from fact_text to highlight), and \"subject\" (a concise description of the main visual subject for an image, e.g. 'Golden Retriever'). No markdown formatting, no extra text."
+    },
+    "image_generation": {
+        "prompt_template": "Use @img1 as the exact design template. Preserve the layout, typography, spacing, black textured background, electric yellow accents, and minimalist editorial aesthetic.\n\nCreate a \"Did You Know?\" post about {TOPIC}.\n\nHeadline: DID YOU KNOW?\n\nBody: {FACT_TEXT}\n\nHighlight {HIGHLIGHT_1} and {HIGHLIGHT_2} in electric yellow.\n\nReplace the right-side graphic with a photorealistic {SUBJECT} that matches the topic. It should have realistic details, soft natural lighting, and a natural pose facing slightly toward the text. Blend the subject into the dark background using subtle cracks, glitch textures, dust particles, and a faint electric-yellow rim light while keeping the subject completely realistic.\n\nKeep the overall design clean, premium, high-contrast, and easy to read with plenty of negative space.\n\nNegative prompt: cartoon, vector, CGI, painting, anime, low quality, blurry, cluttered background, distorted anatomy, extra subjects, oversaturated colors, incorrect text.",
+        "model_id": "bytedance-seedream-4.5",
+        "model_parameters": {
+            "aspect_ratio": "1:1",
+            "resolution": "2K"
+        },
+        "reference_image": "Template.png"
+    },
+    "schedule": {
+        "enabled": false,
+        "interval_hours": 6
+    }
+}
