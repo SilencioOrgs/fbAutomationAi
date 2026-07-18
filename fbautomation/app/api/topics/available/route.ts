@@ -6,7 +6,7 @@ export async function GET(request: Request) {
   const page = parseInt(searchParams.get('page') || '1', 10);
   
   try {
-    const result = TopicController.getAvailableTopics(page);
+    const result = await TopicController.getAvailableTopics(page);
     return NextResponse.json(result);
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
