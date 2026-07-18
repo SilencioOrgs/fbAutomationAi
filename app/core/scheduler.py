@@ -483,6 +483,102 @@ class Pipeline:
             except Exception:
                 pass
 
+    def regenerate_image(self, item_id: int, source: str = "app") -> None:
+        """
+        Regenerate the image for a PREVIEW_PENDING item.
+        1. Validate status == Status.PREVIEW_PENDING.
+        2. Push 'info' message to UI indicating regeneration has started.
+        3. Run image generation in a background thread using the stored image_prompt.
+        """
+        item = self._db.get_content_item(item_id)
+        if item is None or item["status"] != Status.PREVIEW_PENDING:
+            logger.warning("Cannot regenerate image for item %d (status=%s)",
+                           item_id, item.get("status") if item else "not found")
+            return
+
+        self._ui_queue.put({
+            "type": "info",
+            "text": f"Regenerating image for topic #{item_id}...",
+            "item_id": item_id,
+        })
+
+        thread = threading.Thread(
+            target=self._regenerate_image_background,
+            args=(item_id,),
+            daemon=True,
+        )
+        thread.start()
+
+    def _regenerate_image_background(self, item_id: int) -> None:
+        """Background thread for regenerating an image."""
+        try:
+            item = self._db.get_content_item(item_id)
+            if not item:
+                return
+
+            image_config = self._config.get("image_generation", {})
+            image_prompt = item.get("image_prompt", item["topic"])
+            model_id = image_config.get("model_id", "bytedance-seedream-4.5")
+            model_params = image_config.get("model_parameters", {})
+            reference_image = image_config.get("reference_image")
+            reference_image_path = self._resolve_reference_image(reference_image)
+
+            local_path = self._image_gen.generate_image(
+                item_id,
+                image_prompt,
+                model_id,
+                model_params,
+                reference_image_path=reference_image_path,
+            )
+
+            # Update UI
+            self._ui_queue.put({
+                "type": "image_regenerated",
+                "item_id": item_id,
+                "image_path": local_path,
+                "text": f"Image regenerated for #{item_id}",
+            })
+
+            # Notify Telegram if needed (optional, keeping it simple as requested)
+            
+        except Exception as e:
+            error_msg = f"Image regeneration failed for item #{item_id}: {e}"
+            logger.error(error_msg)
+            self._ui_queue.put({
+                "type": "error",
+                "text": error_msg,
+                "item_id": item_id,
+            })
+
+    def update_caption(
+        self, item_id: int, title: str, description: str, hashtags: str, source: str = "app"
+    ) -> None:
+        """
+        Manually update the caption fields for a PREVIEW_PENDING item.
+        """
+        item = self._db.get_content_item(item_id)
+        if item is None or item["status"] != Status.PREVIEW_PENDING:
+            logger.warning("Cannot update caption for item %d (status=%s)",
+                           item_id, item.get("status") if item else "not found")
+            return
+
+        self._db.update_status(
+            item_id,
+            Status.PREVIEW_PENDING,
+            generated_title=title,
+            generated_description=description,
+            generated_hashtags=hashtags,
+        )
+
+        self._ui_queue.put({
+            "type": "caption_updated",
+            "item_id": item_id,
+            "title": title,
+            "description": description,
+            "hashtags": hashtags,
+            "text": f"Caption updated for #{item_id}",
+        })
+
     def _build_image_prompt(self, template: str, item: dict) -> str:
         """Fill image-prompt placeholders without treating other braces as errors."""
         topic = item.get("topic", "")

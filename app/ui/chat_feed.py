@@ -45,6 +45,7 @@ BUBBLE_COLORS = {
 
 PREVIEW_IMAGE_SIZE = (400, 225)  # 16:9 aspect for previews
 
+from ui.post_preview_card import PostPreviewCard
 
 class ChatFeed(ctk.CTkFrame):
     """Scrollable chat-style feed showing all pipeline events."""
@@ -158,15 +159,23 @@ class ChatFeed(ctk.CTkFrame):
                 action_type="topic_approval",
             )
         elif status == Status.PREVIEW_PENDING:
-            caption = self._format_caption(item)
-            self.add_message(
-                text=f"[Preview #{item_id}]\n{caption}",
-                msg_type="preview",
-                item_id=item_id,
-                image_path=item.get("image_local_path"),
-                show_actions=True,
-                action_type="preview_approval",
+            card = PostPreviewCard(
+                self._feed_frame,
+                item=item,
+                config=self._pipeline.get_config(),
+                on_approve=lambda iid: self._on_approve(iid, "preview_approval"),
+                on_reject=lambda iid: self._on_reject(iid, "preview_approval"),
+                on_recreate_image=self._pipeline.regenerate_image,
+                on_edit_caption=self._pipeline.update_caption,
             )
+            self._message_widgets[item_id] = {
+                "bubble_outer": card,
+                "bubble": card,
+                "action_frame": card.get_action_frame(),
+                "accent_bar": card.get_accent_bar(),
+                "preview_card": card,
+            }
+            self._feed_frame.after(50, self._scroll_to_bottom)
         elif status == Status.APPROVED:
             # Could be awaiting region selection (after preview approval)
             if item.get("image_local_path"):
@@ -456,15 +465,19 @@ class ChatFeed(ctk.CTkFrame):
             action_frame.destroy()
             widget_refs["action_frame"] = None
 
-        # Update accent color
-        accent_bar = widget_refs.get("accent_bar")
-        if accent_bar:
-            if new_status == Status.REJECTED:
-                accent_bar.configure(fg_color=COLOR_ERROR)
-            elif new_status in (Status.APPROVED, Status.PUBLISHING):
-                accent_bar.configure(fg_color=COLOR_SUCCESS)
-            elif new_status == Status.PUBLISHED:
-                accent_bar.configure(fg_color=COLOR_SUCCESS)
+        # Update accent color or disable card actions
+        preview_card = widget_refs.get("preview_card")
+        if preview_card:
+            preview_card.disable_actions(new_status)
+        else:
+            accent_bar = widget_refs.get("accent_bar")
+            if accent_bar:
+                if new_status == Status.REJECTED:
+                    accent_bar.configure(fg_color=COLOR_ERROR)
+                elif new_status in (Status.APPROVED, Status.PUBLISHING):
+                    accent_bar.configure(fg_color=COLOR_SUCCESS)
+                elif new_status == Status.PUBLISHED:
+                    accent_bar.configure(fg_color=COLOR_SUCCESS)
             elif new_status == Status.SCHEDULED:
                 accent_bar.configure(fg_color=COLOR_SCHEDULED)
             elif new_status == Status.FAILED:
@@ -615,15 +628,39 @@ class ChatFeed(ctk.CTkFrame):
 
         elif msg_type == "preview_approval":
             item = msg.get("item", {})
-            caption = self._format_caption(item)
-            self.add_message(
-                text=f"[Preview #{item.get('id', '?')}]\n{caption}",
-                msg_type="preview",
-                item_id=item.get("id"),
-                image_path=msg.get("image_path"),
-                show_actions=True,
-                action_type="preview_approval",
+            card = PostPreviewCard(
+                self._feed_frame,
+                item=item,
+                config=self._pipeline.get_config(),
+                on_approve=lambda iid: self._on_approve(iid, "preview_approval"),
+                on_reject=lambda iid: self._on_reject(iid, "preview_approval"),
+                on_recreate_image=self._pipeline.regenerate_image,
+                on_edit_caption=self._pipeline.update_caption,
             )
+            self._message_widgets[item.get("id")] = {
+                "bubble_outer": card,
+                "bubble": card,
+                "action_frame": card.get_action_frame(),
+                "accent_bar": card.get_accent_bar(),
+                "preview_card": card,
+            }
+            self._feed_frame.after(50, self._scroll_to_bottom)
+
+        elif msg_type == "image_regenerated":
+            item_id = msg.get("item_id")
+            widget_refs = self._message_widgets.get(item_id)
+            if widget_refs and "preview_card" in widget_refs:
+                widget_refs["preview_card"].update_image(msg.get("image_path"))
+            
+        elif msg_type == "caption_updated":
+            item_id = msg.get("item_id")
+            widget_refs = self._message_widgets.get(item_id)
+            if widget_refs and "preview_card" in widget_refs:
+                widget_refs["preview_card"].update_caption(
+                    title=msg.get("title", ""),
+                    description=msg.get("description", ""),
+                    hashtags=msg.get("hashtags", "")
+                )
 
         elif msg_type == "region_selection":
             item_id = msg.get("item_id")

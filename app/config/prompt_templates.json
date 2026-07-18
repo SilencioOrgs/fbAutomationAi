@@ -1,4 +1,8 @@
 {
+    "branding": {
+        "page_name": "Did You Know?",
+        "page_avatar_initial": "D"
+    },
     "topic_generation": {
         "system_prompt": "You are a social media content strategist specializing in creating viral Facebook content.",
         "user_prompt": "Generate {count} unique, engaging Facebook post topic ideas for the niche: {niche}. Each topic should be specific enough to write a full post about. Return ONLY a valid JSON array of strings, no markdown formatting, no extra text. Example: [\"topic 1\", \"topic 2\"]",
