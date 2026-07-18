@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS content_items (
                               'generating_content',
                               'generating_image',
                               'preview_pending',
+                              'scheduled',
                               'publishing',
                               'published',
                               'failed'
@@ -34,6 +35,12 @@ CREATE TABLE IF NOT EXISTS content_items (
     generated_hashtags    TEXT,
     image_local_path      TEXT,
     image_prompt          TEXT,
+    subject               TEXT,
+    headline              TEXT,
+    fact_text             TEXT,
+    highlight_1           TEXT,
+    highlight_2           TEXT,
+    category              TEXT,
     ai33pro_task_id       TEXT,
     fb_post_id            TEXT,
     telegram_msg_id       INTEGER,
@@ -62,6 +69,34 @@ CREATE INDEX IF NOT EXISTS idx_usage_log_provider
     ON usage_log(provider);
 CREATE INDEX IF NOT EXISTS idx_usage_log_timestamp
     ON usage_log(timestamp);
+
+CREATE TABLE IF NOT EXISTS topic_source_rows (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_file     TEXT    NOT NULL,
+    row_index       INTEGER NOT NULL,
+    topic           TEXT    NOT NULL,
+    consumed        INTEGER NOT NULL DEFAULT 0,
+    content_item_id INTEGER,
+    created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+    FOREIGN KEY (content_item_id) REFERENCES content_items(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_topic_source_rows_file
+    ON topic_source_rows(source_file, consumed);
+
+CREATE TABLE IF NOT EXISTS scheduled_posts (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_item_id   INTEGER NOT NULL,
+    target_region     TEXT    NOT NULL,
+    scheduled_time_utc TEXT   NOT NULL,
+    status            TEXT    NOT NULL DEFAULT 'queued'
+                      CHECK (status IN ('queued', 'posted', 'failed')),
+    created_at        TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+    FOREIGN KEY (content_item_id) REFERENCES content_items(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_posts_status
+    ON scheduled_posts(status, scheduled_time_utc);
 """
 
 
@@ -85,11 +120,14 @@ class Database:
         conn = self.get_connection()
         conn.executescript(_SCHEMA_SQL)
         
-        # Auto-migration for image_prompt column
+        # Auto-migration for columns that may not exist in older databases
         cursor = conn.execute("PRAGMA table_info(content_items)")
         columns = [row["name"] for row in cursor.fetchall()]
         if "image_prompt" not in columns:
             conn.execute("ALTER TABLE content_items ADD COLUMN image_prompt TEXT")
+        for col in ("subject", "headline", "fact_text", "highlight_1", "highlight_2", "category"):
+            if col not in columns:
+                conn.execute(f"ALTER TABLE content_items ADD COLUMN {col} TEXT")
             
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.commit()
@@ -110,13 +148,24 @@ class Database:
     #  content_items CRUD
     # ------------------------------------------------------------------ #
 
-    def create_content_item(self, topic: str) -> int:
-        """Insert a new topic with status 'pending_approval'. Returns row id."""
+    def create_content_item(self, topic: str, **extra_fields) -> int:
+        """Insert a new topic with status 'pending_approval'. Returns row id.
+        
+        Extra fields (subject, headline, fact_text, etc.) are passed through
+        as additional column values.
+        """
+        cols = ["topic"]
+        vals = [topic]
+        for key, value in extra_fields.items():
+            cols.append(key)
+            vals.append(value)
+        placeholders = ", ".join("?" for _ in vals)
+        col_names = ", ".join(cols)
+        sql = f"INSERT INTO content_items ({col_names}) VALUES ({placeholders})"
+
         conn = self.get_connection()
         with self._lock:
-            cursor = conn.execute(
-                "INSERT INTO content_items (topic) VALUES (?)", (topic,)
-            )
+            cursor = conn.execute(sql, vals)
             conn.commit()
             item_id = cursor.lastrowid
         logger.info("Created content_item id=%d topic='%s'", item_id, topic[:60])
@@ -178,6 +227,96 @@ class Database:
                        updated_at = strftime('%Y-%m-%dT%H:%M:%S', 'now')
                    WHERE id = ?""",
                 (chat_id, msg_id, item_id),
+            )
+            conn.commit()
+
+    # ------------------------------------------------------------------ #
+    #  topic_source_rows
+    # ------------------------------------------------------------------ #
+
+    def get_consumed_row_indices(self, source_file: str) -> set[int]:
+        """Return the set of row_index values already consumed for a file."""
+        conn = self.get_connection()
+        rows = conn.execute(
+            "SELECT row_index FROM topic_source_rows WHERE source_file = ? AND consumed = 1",
+            (source_file,),
+        ).fetchall()
+        return {r["row_index"] for r in rows}
+
+    def mark_row_consumed(
+        self, source_file: str, row_index: int, topic: str, content_item_id: int
+    ) -> int:
+        """Insert a consumed row into topic_source_rows. Returns the new row id."""
+        conn = self.get_connection()
+        with self._lock:
+            cursor = conn.execute(
+                """INSERT INTO topic_source_rows
+                   (source_file, row_index, topic, consumed, content_item_id)
+                   VALUES (?, ?, ?, 1, ?)""",
+                (source_file, row_index, topic, content_item_id),
+            )
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_remaining_topic_count(self, source_file: str, total_rows: int) -> int:
+        """Return how many rows from source_file have NOT been consumed."""
+        conn = self.get_connection()
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM topic_source_rows WHERE source_file = ? AND consumed = 1",
+            (source_file,),
+        ).fetchone()
+        consumed = row["cnt"] if row else 0
+        return max(0, total_rows - consumed)
+
+    # ------------------------------------------------------------------ #
+    #  scheduled_posts
+    # ------------------------------------------------------------------ #
+
+    def insert_scheduled_post(
+        self, content_item_id: int, target_region: str, scheduled_time_utc: str
+    ) -> int:
+        """Insert a new scheduled_posts row. Returns the row id."""
+        conn = self.get_connection()
+        with self._lock:
+            cursor = conn.execute(
+                """INSERT INTO scheduled_posts
+                   (content_item_id, target_region, scheduled_time_utc)
+                   VALUES (?, ?, ?)""",
+                (content_item_id, target_region, scheduled_time_utc),
+            )
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_due_scheduled_posts(self, now_utc: str) -> list[dict]:
+        """Fetch scheduled_posts where status='queued' and scheduled_time_utc <= now."""
+        conn = self.get_connection()
+        rows = conn.execute(
+            """SELECT * FROM scheduled_posts
+               WHERE status = 'queued' AND scheduled_time_utc <= ?
+               ORDER BY scheduled_time_utc ASC""",
+            (now_utc,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_queued_posts_in_window(self, window_start_utc: str, window_end_utc: str) -> list[dict]:
+        """Fetch all queued/posted scheduled_posts in a time window."""
+        conn = self.get_connection()
+        rows = conn.execute(
+            """SELECT * FROM scheduled_posts
+               WHERE status IN ('queued', 'posted')
+                 AND scheduled_time_utc >= ? AND scheduled_time_utc <= ?
+               ORDER BY scheduled_time_utc ASC""",
+            (window_start_utc, window_end_utc),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_scheduled_post_status(self, post_id: int, status: str) -> None:
+        """Update the status of a scheduled_posts row."""
+        conn = self.get_connection()
+        with self._lock:
+            conn.execute(
+                "UPDATE scheduled_posts SET status = ? WHERE id = ?",
+                (status, post_id),
             )
             conn.commit()
 

@@ -2,6 +2,10 @@
 Telegram bot for remote approval workflow.
 Runs in its own daemon thread with its own asyncio event loop.
 Communicates with the UI thread via a thread-safe queue.
+
+When TELEGRAM_BOT_TOKEN is empty or a placeholder, the bot enters
+disabled mode: all public methods no-op with a debug log line
+rather than raising exceptions.
 """
 
 import asyncio
@@ -10,24 +14,33 @@ import os
 import queue
 import threading
 
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-)
-
 from db.db import Database
 from db.models import Status, format_status
 
 logger = logging.getLogger(__name__)
+
+# Telegram imports are deferred — only needed when the bot is enabled.
+_telegram_available = False
+try:
+    from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
+    from telegram.ext import (
+        Application,
+        CallbackQueryHandler,
+        CommandHandler,
+        ContextTypes,
+    )
+    _telegram_available = True
+except ImportError:
+    logger.info("python-telegram-bot not installed — Telegram bot disabled")
 
 
 class TelegramBot:
     """
     Telegram bot that handles approval workflows.
     Runs in a dedicated daemon thread with its own asyncio event loop.
+
+    When disabled (no token or missing library), every public method
+    is a silent no-op — the app can fully operate without Telegram.
     """
 
     def __init__(
@@ -45,9 +58,20 @@ class TelegramBot:
         self._pipeline = pipeline  # Set after Pipeline is created
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._app: Application | None = None
-        self._bot: Bot | None = None
+        self._app = None  # Application
+        self._bot = None  # Bot
         self._running = False
+
+    @property
+    def is_enabled(self) -> bool:
+        """True if bot token is configured, non-empty, and not a placeholder."""
+        if not _telegram_available:
+            return False
+        return bool(
+            self._token
+            and self._token.strip()
+            and self._token != "your_telegram_bot_token"
+        )
 
     def set_pipeline(self, pipeline) -> None:
         """Set the pipeline reference (resolves circular dependency)."""
@@ -55,6 +79,10 @@ class TelegramBot:
 
     def start(self) -> None:
         """Start the bot in a new daemon thread with its own asyncio loop."""
+        if not self.is_enabled:
+            logger.info("Telegram bot disabled (no valid token configured)")
+            return
+
         if self._running:
             logger.warning("Telegram bot is already running")
             return
@@ -68,6 +96,9 @@ class TelegramBot:
 
     def stop(self) -> None:
         """Gracefully shut down the bot and its thread."""
+        if not self.is_enabled or not self._running:
+            return
+
         self._running = False
         if self._loop and self._app:
             asyncio.run_coroutine_threadsafe(
@@ -131,6 +162,10 @@ class TelegramBot:
 
     def send_topic_approval_threadsafe(self, item: dict) -> None:
         """Thread-safe wrapper to send topic approval message."""
+        if not self.is_enabled:
+            logger.debug("Telegram disabled — skipping send_topic_approval for item %s",
+                         item.get("id"))
+            return
         if self._loop and self._running:
             future = asyncio.run_coroutine_threadsafe(
                 self.send_topic_approval(item), self._loop
@@ -142,6 +177,10 @@ class TelegramBot:
 
     def send_preview_approval_threadsafe(self, item: dict) -> None:
         """Thread-safe wrapper to send preview approval message."""
+        if not self.is_enabled:
+            logger.debug("Telegram disabled — skipping send_preview_approval for item %s",
+                         item.get("id"))
+            return
         if self._loop and self._running:
             future = asyncio.run_coroutine_threadsafe(
                 self.send_preview_approval(item), self._loop
@@ -153,6 +192,9 @@ class TelegramBot:
 
     def send_notification_threadsafe(self, text: str) -> None:
         """Thread-safe wrapper to send a plain notification."""
+        if not self.is_enabled:
+            logger.debug("Telegram disabled — skipping notification: %s", text[:80])
+            return
         if self._loop and self._running:
             future = asyncio.run_coroutine_threadsafe(
                 self.send_notification(text), self._loop
@@ -164,6 +206,10 @@ class TelegramBot:
 
     def update_message_status_threadsafe(self, item: dict, decision: str) -> None:
         """Thread-safe wrapper to edit a Telegram message with the decision."""
+        if not self.is_enabled:
+            logger.debug("Telegram disabled — skipping update_message_status for item %s",
+                         item.get("id"))
+            return
         if self._loop and self._running:
             future = asyncio.run_coroutine_threadsafe(
                 self.update_message_status(item, decision), self._loop
@@ -172,6 +218,21 @@ class TelegramBot:
                 future.result(timeout=15)
             except Exception as e:
                 logger.error("Failed to update Telegram message: %s", e)
+
+    def send_region_selection_threadsafe(self, item: dict, regions: list[str]) -> None:
+        """Thread-safe wrapper to send region-selection buttons."""
+        if not self.is_enabled:
+            logger.debug("Telegram disabled — skipping send_region_selection for item %s",
+                         item.get("id"))
+            return
+        if self._loop and self._running:
+            future = asyncio.run_coroutine_threadsafe(
+                self.send_region_selection(item, regions), self._loop
+            )
+            try:
+                future.result(timeout=15)
+            except Exception as e:
+                logger.error("Failed to send region selection: %s", e)
 
     # ------------------------------------------------------------------ #
     #  Async message methods
@@ -282,6 +343,47 @@ class TelegramBot:
                 error_msg=str(e),
             )
 
+    async def send_region_selection(self, item: dict, regions: list[str]) -> None:
+        """Send region-selection inline keyboard to admin."""
+        if not self._bot:
+            return
+
+        item_id = item["id"]
+        text = (
+            f"[Schedule #{item_id}]\n\n"
+            f"Preview approved. Select target region:"
+        )
+        buttons = [
+            InlineKeyboardButton(
+                region, callback_data=f"select_region:{item_id}:{region}"
+            )
+            for region in regions
+        ]
+        # Arrange buttons in rows of 2
+        rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+        keyboard = InlineKeyboardMarkup(rows)
+
+        try:
+            msg = await self._bot.send_message(
+                chat_id=self._admin_id,
+                text=text,
+                reply_markup=keyboard,
+            )
+            self._db.log_usage(
+                provider="telegram",
+                endpoint="sendMessage",
+                success=True,
+            )
+            logger.info("Sent region selection to Telegram for item_id=%d", item_id)
+        except Exception as e:
+            logger.error("Failed to send region selection to Telegram: %s", e)
+            self._db.log_usage(
+                provider="telegram",
+                endpoint="sendMessage",
+                success=False,
+                error_msg=str(e),
+            )
+
     async def send_notification(self, text: str) -> None:
         """Send a plain text notification to the admin."""
         if not self._bot:
@@ -363,6 +465,7 @@ class TelegramBot:
             Status.GENERATING_CONTENT,
             Status.GENERATING_IMAGE,
             Status.PREVIEW_PENDING,
+            Status.SCHEDULED,
             Status.PUBLISHED,
             Status.FAILED,
         ]:
@@ -375,7 +478,7 @@ class TelegramBot:
     async def _handle_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        """Handle inline button callbacks for approve/reject actions."""
+        """Handle inline button callbacks for approve/reject/region actions."""
         query = update.callback_query
         if query.from_user.id != self._admin_id:
             await query.answer("Unauthorized.")
@@ -388,6 +491,29 @@ class TelegramBot:
             logger.error("Pipeline not set on Telegram bot")
             return
 
+        # Handle region selection (format: "select_region:{item_id}:{region}")
+        if data.startswith("select_region:"):
+            parts = data.split(":", 2)
+            if len(parts) != 3:
+                logger.error("Invalid region selection callback: %s", data)
+                return
+            try:
+                item_id = int(parts[1])
+                region = parts[2]
+            except (ValueError, IndexError):
+                logger.error("Invalid region selection callback: %s", data)
+                return
+
+            # Remove the inline keyboard
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+
+            self._pipeline.select_region(item_id, region, source="telegram")
+            return
+
+        # Standard approve/reject callbacks
         try:
             action, item_id_str = data.split(":", 1)
             item_id = int(item_id_str)

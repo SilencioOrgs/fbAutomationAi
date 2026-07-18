@@ -2,7 +2,7 @@
 Central pipeline orchestrator and scheduler.
 Owns all state machine transitions. Both UI and Telegram handlers
 call into this module for approve/reject/generate actions.
-Uses APScheduler for periodic topic generation.
+Uses APScheduler for periodic topic generation and scheduled post checking.
 """
 
 import json
@@ -10,13 +10,16 @@ import logging
 import os
 import queue
 import threading
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from core.content_gen import ContentGenerator
 from core.fb_publisher import FacebookPublisher
 from core.image_gen import ImageGenerator
-from core.topic_gen import TopicGenerator
+from core.topic_source import TopicSource
+from core import scheduling as scheduling_mod
 from db.db import Database
 from db.models import Status
 
@@ -32,7 +35,7 @@ class Pipeline:
     def __init__(
         self,
         db: Database,
-        topic_gen: TopicGenerator,
+        topic_source: TopicSource,
         content_gen: ContentGenerator,
         image_gen: ImageGenerator,
         publisher: FacebookPublisher,
@@ -41,7 +44,7 @@ class Pipeline:
         config: dict | None = None,
     ) -> None:
         self._db = db
-        self._topic_gen = topic_gen
+        self._topic_source = topic_source
         self._content_gen = content_gen
         self._image_gen = image_gen
         self._publisher = publisher
@@ -77,38 +80,57 @@ class Pipeline:
         return self._config
 
     # ------------------------------------------------------------------ #
-    #  Topic generation
+    #  Topic generation (Excel-sourced)
     # ------------------------------------------------------------------ #
 
     def trigger_topic_generation(
         self, niche: str | None = None, count: int = 3
     ) -> None:
         """
-        Trigger topic generation in a background thread.
-        Uses niche from config if not specified.
+        Trigger topic pulling from the active Excel file in a background thread.
+        The niche parameter is kept for API compatibility but ignored
+        (topics come from the Excel file now).
         """
-        if niche is None:
-            topic_config = self._config.get("topic_generation", {})
-            niche = topic_config.get("niche", "technology and AI")
-            count = topic_config.get("default_count", count)
+        topic_config = self._config.get("topic_generation", {})
+        count = topic_config.get("default_count", count)
 
         thread = threading.Thread(
             target=self._generate_topics_background,
-            args=(niche, count),
+            args=(count,),
             daemon=True,
         )
         thread.start()
 
-    def _generate_topics_background(self, niche: str, count: int) -> None:
-        """Background thread: generate topics and send approvals."""
+    def _generate_topics_background(self, count: int) -> None:
+        """Background thread: pull topics from Excel and send approvals."""
         try:
+            # Resolve the active topic file
+            active_file = self._resolve_topic_file()
+            if not active_file:
+                error_msg = (
+                    "No topic file configured. Go to Settings and select "
+                    "an Excel file, or place one in the app directory."
+                )
+                self._ui_queue.put({"type": "error", "text": error_msg})
+                try:
+                    self._telegram.send_notification_threadsafe(
+                        f"[ERROR] {error_msg}"
+                    )
+                except Exception:
+                    pass
+                return
+
             self._ui_queue.put({
                 "type": "info",
-                "text": f"Generating {count} topic ideas for \"{niche}\"...",
+                "text": f"Pulling {count} topics from \"{os.path.basename(active_file)}\"...",
             })
 
-            template = self._config.get("topic_generation", {})
-            items = self._topic_gen.generate_topics(niche, count, template)
+            items = self._topic_source.get_next_topics(active_file, count)
+
+            if not items:
+                # File exhausted
+                self._handle_file_exhausted(active_file)
+                return
 
             for item in items:
                 # Notify UI
@@ -121,6 +143,16 @@ class Pipeline:
                     self._telegram.send_topic_approval_threadsafe(item)
                 except Exception as e:
                     logger.error("Failed to send topic to Telegram: %s", e)
+
+            # Check if file is now exhausted after this pull
+            remaining = self._topic_source.get_remaining_count(active_file)
+            if remaining == 0:
+                self._handle_file_exhausted(active_file)
+            else:
+                self._ui_queue.put({
+                    "type": "info",
+                    "text": f"{remaining} topics remaining in \"{os.path.basename(active_file)}\".",
+                })
 
         except Exception as e:
             error_msg = f"Topic generation failed: {e}"
@@ -135,6 +167,41 @@ class Pipeline:
                 )
             except Exception:
                 pass
+
+    def _resolve_topic_file(self) -> str | None:
+        """Resolve the active topic file path from config."""
+        ts_cfg = self._config.get("topic_source", {})
+        active = ts_cfg.get("active_file", "")
+        if not active:
+            return None
+
+        # If relative, resolve against the app directory
+        if not os.path.isabs(active):
+            app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            active = os.path.join(app_dir, active)
+
+        if os.path.isfile(active):
+            return active
+        return None
+
+    def _handle_file_exhausted(self, file_path: str) -> None:
+        """Notify both channels that the topic file has been exhausted."""
+        filename = os.path.basename(file_path)
+        msg = (
+            f"All topics used from \"{filename}\" — "
+            f"upload a new topic file to continue."
+        )
+        self._ui_queue.put({
+            "type": "topic_file_exhausted",
+            "text": msg,
+            "filename": filename,
+        })
+        try:
+            self._telegram.send_notification_threadsafe(
+                f"[NOTICE] {msg}"
+            )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ #
     #  State machine actions
@@ -202,37 +269,108 @@ class Pipeline:
 
     def approve_preview(self, item_id: int, source: str = "app") -> None:
         """
-        Approve a final preview:
-        1. Update status to 'publishing'
-        2. Update the other channel
-        3. Kick off Facebook publish in background
+        Approve a final preview — now prompts for region selection
+        instead of publishing immediately.
+
+        1. Update status to APPROVED
+        2. Send region-selection buttons to both channels
         """
         item = self._db.get_content_item(item_id)
         if item is None or item["status"] != Status.PREVIEW_PENDING:
             return
 
-        self._db.update_status(item_id, Status.PUBLISHING)
+        self._db.update_status(item_id, Status.APPROVED)
         item = self._db.get_content_item(item_id)
 
+        # Get available regions from config
+        sched_cfg = self._config.get("scheduling", {})
+        regions = list(sched_cfg.get("regions", {}).keys())
+        if not regions:
+            regions = ["Global"]
+
+        # Notify the other channel
         if source != "telegram":
             try:
                 self._telegram.update_message_status_threadsafe(item, "APPROVED")
+                self._telegram.send_region_selection_threadsafe(item, regions)
             except Exception as e:
                 logger.error("Telegram update error: %s", e)
 
+        # Send region selection to UI
         self._ui_queue.put({
-            "type": "status_update",
+            "type": "region_selection",
             "item_id": item_id,
-            "status": Status.PUBLISHING,
-            "text": f"Preview #{item_id} approved. Publishing to Facebook...",
+            "item": item,
+            "regions": regions,
+            "text": f"Preview #{item_id} approved. Select target region for scheduling:",
         })
 
-        thread = threading.Thread(
-            target=self._publish_item,
-            args=(item_id,),
-            daemon=True,
-        )
-        thread.start()
+    def select_region(self, item_id: int, region: str, source: str = "app") -> None:
+        """
+        Handle region selection after preview approval.
+        1. Validate item is in APPROVED status.
+        2. Call scheduling.schedule_post() to compute slot and insert row.
+        3. Notify both channels with confirmation.
+        """
+        item = self._db.get_content_item(item_id)
+        if item is None or item["status"] != Status.APPROVED:
+            logger.warning(
+                "Cannot schedule item %d (status=%s)",
+                item_id, item.get("status") if item else "not found",
+            )
+            return
+
+        try:
+            result = scheduling_mod.schedule_post(
+                content_item_id=item_id,
+                region=region,
+                db=self._db,
+                config=self._config,
+            )
+
+            confirm_text = (
+                f"Scheduled for {result['formatted_time']} "
+                f"— targeting {region} audience."
+            )
+
+            # Notify UI
+            self._ui_queue.put({
+                "type": "status_update",
+                "item_id": item_id,
+                "status": Status.SCHEDULED,
+                "text": confirm_text,
+            })
+
+            # Notify the other channel
+            if source != "telegram":
+                try:
+                    self._telegram.send_notification_threadsafe(
+                        f"Post #{item_id}: {confirm_text}"
+                    )
+                except Exception as e:
+                    logger.error("Telegram notification error: %s", e)
+            else:
+                # Came from Telegram — push to UI
+                self._ui_queue.put({
+                    "type": "info",
+                    "text": f"Post #{item_id}: {confirm_text}",
+                    "item_id": item_id,
+                })
+
+        except Exception as e:
+            error_msg = f"Scheduling failed for item #{item_id}: {e}"
+            logger.error(error_msg)
+            self._ui_queue.put({
+                "type": "error",
+                "text": error_msg,
+                "item_id": item_id,
+            })
+            try:
+                self._telegram.send_notification_threadsafe(
+                    f"[ERROR] {error_msg}"
+                )
+            except Exception:
+                pass
 
     def reject_preview(self, item_id: int, source: str = "app") -> None:
         """Reject a preview. Updates both channels."""
@@ -263,7 +401,7 @@ class Pipeline:
     def _process_approved_item(self, item_id: int) -> None:
         """
         Full processing pipeline for an approved topic:
-        1. Generate content (title, description, hashtags) via Gemini
+        1. Generate content (title, description, hashtags) from Excel fields
         2. Generate image via AI33PRO
         3. Send preview for final approval
         """
@@ -411,6 +549,47 @@ class Pipeline:
                 pass
 
     # ------------------------------------------------------------------ #
+    #  Scheduled posts checker
+    # ------------------------------------------------------------------ #
+
+    def _check_scheduled_posts(self) -> None:
+        """
+        Runs every minute via APScheduler.
+        Finds scheduled_posts where scheduled_time_utc <= now and status = 'queued'.
+        For each: calls _publish_item, then updates scheduled_posts status.
+        """
+        try:
+            now_utc = datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%S")
+            due_posts = self._db.get_due_scheduled_posts(now_utc)
+
+            for post in due_posts:
+                post_id = post["id"]
+                content_item_id = post["content_item_id"]
+
+                logger.info(
+                    "Executing scheduled post #%d for item #%d (region=%s)",
+                    post_id, content_item_id, post.get("target_region"),
+                )
+
+                try:
+                    # Update content_item status to PUBLISHING
+                    self._db.update_status(content_item_id, Status.PUBLISHING)
+                    # Reuse the existing publish path
+                    self._publish_item(content_item_id)
+                    # Mark scheduled post as posted
+                    self._db.update_scheduled_post_status(post_id, "posted")
+                except Exception as e:
+                    logger.error(
+                        "Scheduled publish failed for post #%d item #%d: %s",
+                        post_id, content_item_id, e,
+                    )
+                    self._db.update_scheduled_post_status(post_id, "failed")
+                    # _publish_item already notifies both channels on failure
+
+        except Exception as e:
+            logger.error("Error in _check_scheduled_posts: %s", e)
+
+    # ------------------------------------------------------------------ #
     #  Scheduler
     # ------------------------------------------------------------------ #
 
@@ -418,31 +597,40 @@ class Pipeline:
         self,
         interval_hours: int | None = None,
     ) -> None:
-        """Start APScheduler for periodic topic generation."""
+        """Start APScheduler for periodic topic generation and scheduled post checking."""
         if self._scheduler and self._scheduler.running:
             self._scheduler.shutdown(wait=False)
 
-        schedule_config = self._config.get("schedule", {})
-        if not schedule_config.get("enabled", False) and interval_hours is None:
-            logger.info("Scheduler not enabled in config")
-            return
-
-        hours = interval_hours or schedule_config.get("interval_hours", 6)
-
         self._scheduler = BackgroundScheduler()
+
+        # Scheduled posts checker — always runs every minute
         self._scheduler.add_job(
-            self.trigger_topic_generation,
+            self._check_scheduled_posts,
             "interval",
-            hours=hours,
-            id="topic_gen_job",
+            minutes=1,
+            id="scheduled_posts_checker",
             replace_existing=True,
         )
+
+        # Topic generation scheduler (optional, config-driven)
+        schedule_config = self._config.get("schedule", {})
+        if schedule_config.get("enabled", False) or interval_hours is not None:
+            hours = interval_hours or schedule_config.get("interval_hours", 6)
+            self._scheduler.add_job(
+                self.trigger_topic_generation,
+                "interval",
+                hours=hours,
+                id="topic_gen_job",
+                replace_existing=True,
+            )
+            logger.info("Topic generation scheduled every %d hours", hours)
+
         self._scheduler.start()
-        logger.info("Scheduler started: topic generation every %d hours", hours)
+        logger.info("Scheduler started (scheduled posts checker active)")
 
         self._ui_queue.put({
             "type": "info",
-            "text": f"Scheduler started: generating topics every {hours} hours.",
+            "text": "Scheduler started: checking for scheduled posts every minute.",
         })
 
     def stop_scheduler(self) -> None:

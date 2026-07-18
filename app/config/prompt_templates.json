@@ -7,7 +7,10 @@
     },
     "content_generation": {
         "system_prompt": "You are a professional Facebook content writer who creates highly engaging posts optimized for reach and interaction.",
-        "user_prompt": "Write a Facebook post for this topic: {topic}. Return ONLY a valid JSON object with these keys: \"title\" (short, attention-grabbing headline), \"description\" (2-3 paragraph engaging post body), \"hashtags\" (array of 5-8 relevant hashtag strings without the # symbol), \"fact_text\" (a short interesting fact about the topic, max 2 sentences), \"highlight_1\" (a 2-3 word phrase from fact_text to highlight), \"highlight_2\" (another 2-3 word phrase from fact_text to highlight), and \"subject\" (a concise description of the main visual subject for an image, e.g. 'Golden Retriever'). No markdown formatting, no extra text."
+        "user_prompt": "Write a Facebook post for this topic: {topic}. Return ONLY a valid JSON object with these keys: \"title\" (short, attention-grabbing headline), \"description\" (2-3 paragraph engaging post body), \"hashtags\" (array of 5-8 relevant hashtag strings without the # symbol), \"fact_text\" (a short interesting fact about the topic, max 2 sentences), \"highlight_1\" (a 2-3 word phrase from fact_text to highlight), \"highlight_2\" (another 2-3 word phrase from fact_text to highlight), and \"subject\" (a concise description of the main visual subject for an image, e.g. 'Golden Retriever'). No markdown formatting, no extra text.",
+        "title_template": "{headline}",
+        "description_template": "{fact_text}",
+        "hashtags_template": "#DidYouKnow #{category} #{subject}"
     },
     "image_generation": {
         "prompt_template": "Use @img1 as the exact design template. Preserve the layout, typography, spacing, black textured background, electric yellow accents, and minimalist editorial aesthetic.\n\nCreate a \"Did You Know?\" post about {TOPIC}.\n\nHeadline: DID YOU KNOW?\n\nBody: {FACT_TEXT}\n\nHighlight {HIGHLIGHT_1} and {HIGHLIGHT_2} in electric yellow.\n\nReplace the right-side graphic with a photorealistic {SUBJECT} that matches the topic. It should have realistic details, soft natural lighting, and a natural pose facing slightly toward the text. Blend the subject into the dark background using subtle cracks, glitch textures, dust particles, and a faint electric-yellow rim light while keeping the subject completely realistic.\n\nKeep the overall design clean, premium, high-contrast, and easy to read with plenty of negative space.\n\nNegative prompt: cartoon, vector, CGI, painting, anime, low quality, blurry, cluttered background, distorted anatomy, extra subjects, oversaturated colors, incorrect text.",
@@ -17,6 +20,20 @@
             "resolution": "2K"
         },
         "reference_image": "Template.png"
+    },
+    "topic_source": {
+        "required_columns": ["Topic", "Subject", "Headline", "Fact_Text", "Highlight_1", "Highlight_2", "Category"],
+        "active_file": "Animal_Did_You_Know_Facts.xlsx"
+    },
+    "scheduling": {
+        "min_interval_minutes": 120,
+        "max_posts_per_24h": 4,
+        "regions": {
+            "US": { "timezone": "America/New_York", "peak_hours_local": [["11:00","13:00"], ["19:00","21:00"]] },
+            "PH": { "timezone": "Asia/Manila", "peak_hours_local": [["12:00","13:00"], ["20:00","22:00"]] },
+            "EU": { "timezone": "Europe/London", "peak_hours_local": [["12:00","14:00"], ["18:00","20:00"]] },
+            "Global": { "timezone": "UTC", "peak_hours_local": [["13:00","15:00"], ["19:00","21:00"]] }
+        }
     },
     "schedule": {
         "enabled": false,

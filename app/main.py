@@ -22,7 +22,7 @@ from core.fb_publisher import FacebookPublisher
 from core.image_gen import ImageGenerator
 from core.scheduler import Pipeline
 from core.telegram_bot import TelegramBot
-from core.topic_gen import TopicGenerator
+from core.topic_source import TopicSource
 from db.db import Database
 from ui.chat_feed import ChatFeed
 from ui.logs import LogsPanel
@@ -90,13 +90,11 @@ class App(ctk.CTk):
         # Build UI
         self._build_ui()
 
-        # Start Telegram bot
+        # Start Telegram bot (no-ops if disabled)
         self._telegram.start()
 
-        # Start scheduler if enabled
-        schedule_cfg = self._config.get("schedule", {})
-        if schedule_cfg.get("enabled", False):
-            self._pipeline.start_scheduler()
+        # Always start the scheduler (it runs the scheduled posts checker)
+        self._pipeline.start_scheduler()
 
         # Handle close
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -104,12 +102,13 @@ class App(ctk.CTk):
         logger.info("Application started")
 
     def _validate_env(self) -> None:
-        """Validate that all required environment variables are set."""
+        """Validate that required environment variables are set.
+        
+        TELEGRAM_BOT_TOKEN is no longer required — Telegram is optional.
+        GEMINI_API_KEY is no longer used.
+        """
         required = [
-            "GEMINI_API_KEY",
             "AI33PRO_API_KEY",
-            "TELEGRAM_BOT_TOKEN",
-            "TELEGRAM_ADMIN_ID",
             "FB_PAGE_ACCESS_TOKEN",
             "FB_PAGE_ID",
         ]
@@ -143,12 +142,11 @@ class App(ctk.CTk):
         self._db.initialize()
 
         # Core modules
-        self._topic_gen = TopicGenerator(
-            api_key=os.getenv("GEMINI_API_KEY", ""),
+        self._topic_source = TopicSource(
             db=self._db,
+            config=self._config,
         )
         self._content_gen = ContentGenerator(
-            api_key=os.getenv("GEMINI_API_KEY", ""),
             db=self._db,
         )
         self._image_gen = ImageGenerator(
@@ -178,7 +176,7 @@ class App(ctk.CTk):
         # Pipeline orchestrator
         self._pipeline = Pipeline(
             db=self._db,
-            topic_gen=self._topic_gen,
+            topic_source=self._topic_source,
             content_gen=self._content_gen,
             image_gen=self._image_gen,
             publisher=self._publisher,
@@ -246,7 +244,7 @@ class App(ctk.CTk):
         # Version label at bottom of sidebar
         ctk.CTkLabel(
             self._sidebar,
-            text="v1.0.0",
+            text="v1.1.0",
             font=ctk.CTkFont(size=10),
             text_color=COLOR_TEXT_DIM,
         ).pack(side="bottom", pady=12)
@@ -261,7 +259,8 @@ class App(ctk.CTk):
 
         # Create all panels
         self._feed_panel = ChatFeed(
-            self._content_frame, self._pipeline, self._db, self._ui_queue
+            self._content_frame, self._pipeline, self._db, self._ui_queue,
+            telegram=self._telegram,
         )
         self._settings_panel = SettingsPanel(
             self._content_frame, self._pipeline, self._image_gen, self._config

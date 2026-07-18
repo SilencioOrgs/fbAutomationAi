@@ -1,7 +1,8 @@
 """
 Chat-style message feed — the primary view of the application.
 Shows pipeline events as chronological message bubbles with inline images
-and approve/reject controls.
+and approve/reject controls. Includes region-selection buttons and
+a Telegram connection status indicator.
 """
 
 import logging
@@ -28,6 +29,7 @@ COLOR_TEXT_DIM = "#888888"
 COLOR_SUCCESS = "#4CAF50"
 COLOR_ERROR = "#E53935"
 COLOR_BORDER = "#333333"
+COLOR_SCHEDULED = "#2196F3"
 
 # Bubble type → left border color
 BUBBLE_COLORS = {
@@ -37,6 +39,8 @@ BUBBLE_COLORS = {
     "success": COLOR_SUCCESS,
     "error": COLOR_ERROR,
     "status_update": COLOR_TEXT_DIM,
+    "exhausted": COLOR_ERROR,
+    "scheduled": COLOR_SCHEDULED,
 }
 
 PREVIEW_IMAGE_SIZE = (400, 225)  # 16:9 aspect for previews
@@ -51,11 +55,13 @@ class ChatFeed(ctk.CTkFrame):
         pipeline,
         db: Database,
         ui_queue: queue.Queue,
+        telegram=None,
     ) -> None:
         super().__init__(parent, fg_color=COLOR_BG, corner_radius=0)
         self._pipeline = pipeline
         self._db = db
         self._ui_queue = ui_queue
+        self._telegram = telegram
         self._message_widgets: dict[int, dict] = {}  # item_id → widget refs
         self._image_refs: list = []  # Keep refs to prevent GC
 
@@ -77,6 +83,16 @@ class ChatFeed(ctk.CTkFrame):
             text_color=COLOR_ACCENT,
         ).pack(side="left", padx=16, pady=10)
 
+        # Telegram status indicator (right side of header)
+        self._telegram_status_label = ctk.CTkLabel(
+            header,
+            text="",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color=COLOR_TEXT_DIM,
+        )
+        self._telegram_status_label.pack(side="right", padx=(0, 16), pady=10)
+        self._update_telegram_indicator()
+
         # Generate button in header
         self._generate_btn = ctk.CTkButton(
             header,
@@ -90,7 +106,7 @@ class ChatFeed(ctk.CTkFrame):
             corner_radius=6,
             command=self._on_generate,
         )
-        self._generate_btn.pack(side="right", padx=16, pady=10)
+        self._generate_btn.pack(side="right", padx=(0, 8), pady=10)
 
         # Scrollable feed area
         self._feed_frame = ctk.CTkScrollableFrame(
@@ -101,6 +117,25 @@ class ChatFeed(ctk.CTkFrame):
             scrollbar_button_hover_color=COLOR_ACCENT_DIM,
         )
         self._feed_frame.pack(fill="both", expand=True, padx=0, pady=0)
+
+    def _update_telegram_indicator(self) -> None:
+        """Update the Telegram status indicator in the header."""
+        if self._telegram and hasattr(self._telegram, "is_enabled"):
+            if self._telegram.is_enabled:
+                self._telegram_status_label.configure(
+                    text="Telegram: Connected",
+                    text_color=COLOR_SUCCESS,
+                )
+            else:
+                self._telegram_status_label.configure(
+                    text="Telegram: Not Connected",
+                    text_color=COLOR_TEXT_DIM,
+                )
+        else:
+            self._telegram_status_label.configure(
+                text="Telegram: Not Connected",
+                text_color=COLOR_TEXT_DIM,
+            )
 
     def _load_history(self) -> None:
         """Load existing items from DB and display them in the feed."""
@@ -132,6 +167,37 @@ class ChatFeed(ctk.CTkFrame):
                 show_actions=True,
                 action_type="preview_approval",
             )
+        elif status == Status.APPROVED:
+            # Could be awaiting region selection (after preview approval)
+            if item.get("image_local_path"):
+                # This was a preview that was approved — show region selection
+                sched_cfg = self._pipeline.get_config().get("scheduling", {})
+                regions = list(sched_cfg.get("regions", {}).keys())
+                if regions:
+                    self.add_message(
+                        text=f"[Preview #{item_id} Approved]\nSelect target region:",
+                        msg_type="preview",
+                        item_id=item_id,
+                    )
+                    self._add_region_buttons(item_id, regions)
+                else:
+                    self.add_message(
+                        text=f"[Approved #{item_id}]\n{item['topic']}",
+                        msg_type="info",
+                        item_id=item_id,
+                    )
+            else:
+                self.add_message(
+                    text=f"[Approved #{item_id}]\n{item['topic']}",
+                    msg_type="info",
+                    item_id=item_id,
+                )
+        elif status == Status.SCHEDULED:
+            self.add_message(
+                text=f"[Scheduled #{item_id}]\n{item.get('generated_title', item['topic'])}",
+                msg_type="scheduled",
+                item_id=item_id,
+            )
         elif status == Status.PUBLISHED:
             self.add_message(
                 text=f"[Published #{item_id}]\n{item.get('generated_title', item['topic'])}\nFB Post: {item.get('fb_post_id', 'N/A')}",
@@ -151,7 +217,6 @@ class ChatFeed(ctk.CTkFrame):
                 item_id=item_id,
             )
         elif status in (
-            Status.APPROVED,
             Status.GENERATING_CONTENT,
             Status.GENERATING_IMAGE,
             Status.PUBLISHING,
@@ -174,7 +239,8 @@ class ChatFeed(ctk.CTkFrame):
         """
         Append a message bubble to the feed.
 
-        msg_type: 'info' | 'topic' | 'preview' | 'success' | 'error' | 'status_update'
+        msg_type: 'info' | 'topic' | 'preview' | 'success' | 'error' |
+                  'status_update' | 'exhausted' | 'scheduled'
         If show_actions: render Approve/Reject buttons.
         If image_path: render inline image thumbnail.
         action_type: 'topic_approval' | 'preview_approval'
@@ -273,6 +339,108 @@ class ChatFeed(ctk.CTkFrame):
         # Auto-scroll to bottom
         self._feed_frame.after(50, self._scroll_to_bottom)
 
+    def _add_region_buttons(self, item_id: int, regions: list[str]) -> None:
+        """Add region-selection buttons to the feed for an approved preview."""
+        widget_refs = self._message_widgets.get(item_id)
+        if not widget_refs:
+            return
+
+        bubble = widget_refs.get("bubble")
+        if not bubble:
+            return
+
+        # Remove existing action frame if any
+        old_action = widget_refs.get("action_frame")
+        if old_action:
+            old_action.destroy()
+
+        action_frame = ctk.CTkFrame(bubble, fg_color="transparent")
+        action_frame.pack(fill="x", padx=12, pady=(4, 10))
+
+        for region in regions:
+            btn = ctk.CTkButton(
+                action_frame,
+                text=region,
+                font=ctk.CTkFont(family="Segoe UI", size=12),
+                fg_color=COLOR_ACCENT,
+                text_color="#000000",
+                hover_color=COLOR_ACCENT_DIM,
+                width=80,
+                height=30,
+                corner_radius=6,
+                command=lambda r=region, iid=item_id: self._on_region_select(iid, r),
+            )
+            btn.pack(side="left", padx=(0, 8))
+
+        widget_refs["action_frame"] = action_frame
+        self._feed_frame.after(50, self._scroll_to_bottom)
+
+    def _add_upload_button(self, bubble) -> None:
+        """Add an 'Upload New Topic File' button to an exhaustion bubble."""
+        action_frame = ctk.CTkFrame(bubble, fg_color="transparent")
+        action_frame.pack(fill="x", padx=12, pady=(4, 10))
+
+        upload_btn = ctk.CTkButton(
+            action_frame,
+            text="Upload New Topic File",
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            fg_color=COLOR_ACCENT,
+            text_color="#000000",
+            hover_color=COLOR_ACCENT_DIM,
+            width=180,
+            height=30,
+            corner_radius=6,
+            command=self._on_upload_topic_file,
+        )
+        upload_btn.pack(side="left")
+
+    def _on_upload_topic_file(self) -> None:
+        """Open a file dialog to select a new topic xlsx file."""
+        from tkinter import filedialog
+
+        file_path = filedialog.askopenfilename(
+            title="Select Topic Excel File",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
+        )
+        if not file_path:
+            return
+
+        # Validate the file
+        from core.topic_source import TopicSource
+        config = self._pipeline.get_config()
+        ts = TopicSource(self._db, config)
+        ok, msg = ts.validate_file(file_path)
+
+        if not ok:
+            self.add_message(
+                text=f"File rejected: {msg}",
+                msg_type="error",
+            )
+            return
+
+        # Update config with new file path
+        config.setdefault("topic_source", {})["active_file"] = file_path
+
+        # Save to disk
+        import json
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "config",
+            "prompt_templates.json",
+        )
+        try:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=4, ensure_ascii=False)
+            self._pipeline.reload_config()
+        except Exception as e:
+            logger.error("Failed to save config: %s", e)
+
+        remaining = ts.get_remaining_count(file_path)
+        self.add_message(
+            text=f"Topic file loaded: \"{os.path.basename(file_path)}\" ({remaining} topics available)",
+            msg_type="info",
+        )
+
     def update_message(self, item_id: int, new_status: str, text: str = None) -> None:
         """Update an existing message bubble: disable buttons, show outcome."""
         widget_refs = self._message_widgets.get(item_id)
@@ -297,6 +465,8 @@ class ChatFeed(ctk.CTkFrame):
                 accent_bar.configure(fg_color=COLOR_SUCCESS)
             elif new_status == Status.PUBLISHED:
                 accent_bar.configure(fg_color=COLOR_SUCCESS)
+            elif new_status == Status.SCHEDULED:
+                accent_bar.configure(fg_color=COLOR_SCHEDULED)
             elif new_status == Status.FAILED:
                 accent_bar.configure(fg_color=COLOR_ERROR)
 
@@ -306,6 +476,8 @@ class ChatFeed(ctk.CTkFrame):
             badge_color = COLOR_SUCCESS if new_status not in (
                 Status.REJECTED, Status.FAILED
             ) else COLOR_ERROR
+            if new_status == Status.SCHEDULED:
+                badge_color = COLOR_SCHEDULED
             status_label = ctk.CTkLabel(
                 bubble,
                 text=f"  {format_status(new_status)}  ",
@@ -360,6 +532,10 @@ class ChatFeed(ctk.CTkFrame):
             self._pipeline.reject_topic(item_id, source="app")
         elif action_type == "preview_approval":
             self._pipeline.reject_preview(item_id, source="app")
+
+    def _on_region_select(self, item_id: int, region: str) -> None:
+        """Handle region selection button click."""
+        self._pipeline.select_region(item_id, region, source="app")
 
     def _on_generate(self) -> None:
         """Handle Generate Topics button click."""
@@ -449,6 +625,21 @@ class ChatFeed(ctk.CTkFrame):
                 action_type="preview_approval",
             )
 
+        elif msg_type == "region_selection":
+            item_id = msg.get("item_id")
+            regions = msg.get("regions", [])
+            text = msg.get("text", "")
+
+            # Add the message bubble
+            self.add_message(
+                text=text,
+                msg_type="preview",
+                item_id=item_id,
+            )
+            # Add region buttons
+            if regions:
+                self._add_region_buttons(item_id, regions)
+
         elif msg_type == "content_generated":
             self.add_message(
                 text=msg.get("text", ""),
@@ -471,3 +662,33 @@ class ChatFeed(ctk.CTkFrame):
                 msg_type="success",
                 item_id=None,  # Don't track — it's a notification
             )
+
+        elif msg_type == "topic_file_exhausted":
+            # Show exhaustion message with upload button
+            text = msg.get("text", "")
+            border_color = BUBBLE_COLORS.get("exhausted", COLOR_ERROR)
+
+            bubble_outer = ctk.CTkFrame(
+                self._feed_frame, fg_color=COLOR_BG, corner_radius=0,
+            )
+            bubble_outer.pack(fill="x", padx=12, pady=4)
+
+            accent_bar = ctk.CTkFrame(
+                bubble_outer, fg_color=border_color, width=3, corner_radius=0,
+            )
+            accent_bar.pack(side="left", fill="y")
+
+            bubble = ctk.CTkFrame(
+                bubble_outer, fg_color=COLOR_SURFACE, corner_radius=8,
+            )
+            bubble.pack(side="left", fill="x", expand=True, padx=(6, 0))
+
+            ctk.CTkLabel(
+                bubble, text=text,
+                font=ctk.CTkFont(family="Segoe UI", size=13),
+                text_color=COLOR_TEXT, wraplength=550,
+                justify="left", anchor="w",
+            ).pack(fill="x", padx=12, pady=(10, 4))
+
+            self._add_upload_button(bubble)
+            self._feed_frame.after(50, self._scroll_to_bottom)

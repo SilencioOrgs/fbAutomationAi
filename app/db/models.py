@@ -13,6 +13,7 @@ class Status:
     GENERATING_CONTENT = "generating_content"
     GENERATING_IMAGE = "generating_image"
     PREVIEW_PENDING = "preview_pending"
+    SCHEDULED = "scheduled"
     PUBLISHING = "publishing"
     PUBLISHED = "published"
     FAILED = "failed"
@@ -28,6 +29,7 @@ class Status:
         GENERATING_CONTENT,
         GENERATING_IMAGE,
         PREVIEW_PENDING,
+        SCHEDULED,
         PUBLISHING,
         PUBLISHED,
         FAILED,
@@ -41,6 +43,7 @@ class Status:
         GENERATING_CONTENT: "Generating Content",
         GENERATING_IMAGE: "Generating Image",
         PREVIEW_PENDING: "Preview Pending",
+        SCHEDULED: "Scheduled",
         PUBLISHING: "Publishing",
         PUBLISHED: "Published",
         FAILED: "Failed",
