@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   const key = process.env.AI33PRO_API_KEY;
   if (!key) return NextResponse.json({ error: 'AI33PRO_API_KEY is not configured.' }, { status: 503 });
