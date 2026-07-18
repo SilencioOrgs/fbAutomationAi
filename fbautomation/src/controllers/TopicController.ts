@@ -3,13 +3,13 @@ import { ContentGeneratorService } from '../services/ContentGeneratorService';
 import { ImageGeneratorService } from '../services/ImageGeneratorService';
 
 export class TopicController {
-  static getAvailableTopics(page: number, pageSize: number = 20) {
-    return TopicSourceService.getAvailableTopics(page, pageSize);
+  static async getAvailableTopics(page: number, pageSize: number = 20) {
+    return await TopicSourceService.getAvailableTopics(page, pageSize);
   }
 
-  static async selectTopics(ids: string[]) {
+  static async selectTopics(ids: string[], plannedDate?: string) {
     // 1. Mark as consumed, create ContentItems
-    const createdItems = await TopicSourceService.consumeTopics(ids);
+    const createdItems = await TopicSourceService.consumeTopics(ids, plannedDate);
     
     // 2. Kick off content + image generation for each
     for (const item of createdItems) {

@@ -4,6 +4,10 @@ import { TopicSourceRowModel } from '@/src/models/TopicSourceRowModel';
 
 function validConfig(config: AppConfig): string | null {
   if (!config.branding.page_name.trim()) return 'Page name is required.';
+  if (typeof config.telegram_sync_enabled !== 'boolean') return 'Telegram sync must be enabled or disabled.';
+  if (!['auto', 'telegram'].includes(config.automation?.approval_mode)) return 'Approval mode must be auto or telegram.';
+  if (!['peak_hours', 'fixed_daily_time'].includes(config.automation?.schedule_mode)) return 'Schedule mode is invalid.';
+  if (!/^\d{2}:\d{2}$/.test(config.automation?.daily_upload_time || '') || !config.automation.daily_upload_timezone?.trim()) return 'A valid daily upload time and timezone are required.';
   if (!config.image_generation.model_id.trim()) return 'An image model is required.';
   const { aspect_ratio, resolution } = config.image_generation.model_parameters;
   if (typeof aspect_ratio !== 'string' || !aspect_ratio.trim() || typeof resolution !== 'string' || !resolution.trim()) return 'Image aspect ratio and resolution are required.';

@@ -4,19 +4,19 @@ import fs from 'fs';
 
 export class FacebookPublisherService {
   static async publish(itemId: string): Promise<string | null> {
-    const item = ContentItemModel.getById(itemId);
+    const item = await ContentItemModel.getById(itemId);
     if (!item) return null;
 
     const accessToken = process.env.FB_PAGE_ACCESS_TOKEN;
     const pageId = process.env.FB_PAGE_ID;
 
     if (!accessToken || !pageId) {
-      this.failItem(itemId, "Facebook credentials not configured.");
+      await this.failItem(itemId, "Facebook credentials not configured.");
       return null;
     }
 
-    if (!item.image_local_path || !fs.existsSync(item.image_local_path)) {
-      this.failItem(itemId, "Image file not found locally.");
+    if (!item.image_local_path) {
+      await this.failItem(itemId, "Image URL not found.");
       return null;
     }
 
@@ -33,9 +33,15 @@ export class FacebookPublisherService {
       formData.append('access_token', accessToken);
       formData.append('message', caption);
       
-      const fileBuffer = fs.readFileSync(item.image_local_path);
-      const fileBlob = new Blob([fileBuffer], { type: 'image/png' });
-      formData.append('source', fileBlob, 'image.png');
+      if (item.image_local_path.startsWith('http')) {
+        // We now store the public URL in image_local_path
+        formData.append('url', item.image_local_path);
+      } else {
+        // Fallback for older locally generated files (if any still exist during transition)
+        const fileBuffer = fs.readFileSync(item.image_local_path);
+        const fileBlob = new Blob([fileBuffer], { type: 'image/png' });
+        formData.append('source', fileBlob, 'image.png');
+      }
 
       const response = await fetch(`https://graph.facebook.com/v19.0/${pageId}/photos`, {
         method: 'POST',
@@ -50,7 +56,7 @@ export class FacebookPublisherService {
       const data = await response.json();
       const fbPostId = data.id || data.post_id;
 
-      const updatedItem = ContentItemModel.update(itemId, { 
+      const updatedItem = await ContentItemModel.update(itemId, { 
         status: 'published',
         fb_post_id: fbPostId
       });
@@ -58,13 +64,13 @@ export class FacebookPublisherService {
       
       return fbPostId;
     } catch (error: any) {
-      this.failItem(itemId, `Facebook publish failed: ${error.message}`);
+      await this.failItem(itemId, `Facebook publish failed: ${error.message}`);
       return null;
     }
   }
 
-  private static failItem(itemId: string, msg: string) {
-    const updated = ContentItemModel.update(itemId, { status: 'failed', error_message: msg });
+  private static async failItem(itemId: string, msg: string) {
+    const updated = await ContentItemModel.update(itemId, { status: 'failed', error_message: msg });
     if (updated) eventBus.emit('content_item_updated', updated);
   }
 }

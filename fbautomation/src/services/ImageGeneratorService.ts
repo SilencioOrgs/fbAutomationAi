@@ -4,15 +4,18 @@ import { getConfig } from '../lib/config';
 import eventBus from './PipelineEventBus';
 import fs from 'fs';
 import path from 'path';
+import { SchedulingService } from './SchedulingService';
+import { TelegramService } from './TelegramService';
+import { supabase } from '../lib/supabase';
 
 export class ImageGeneratorService {
   static async startImageGeneration(itemId: string): Promise<void> {
-    const item = ContentItemModel.getById(itemId);
+    const item = await ContentItemModel.getById(itemId);
     if (!item || !item.image_prompt) return;
 
     const apiKey = process.env.AI33PRO_API_KEY;
     if (!apiKey) {
-      this.failItem(itemId, "AI33PRO_API_KEY not configured.");
+      await this.failItem(itemId, "AI33PRO_API_KEY not configured.");
       return;
     }
 
@@ -26,6 +29,17 @@ export class ImageGeneratorService {
       if (config.image_generation.model_parameters) {
         formData.append('model_parameters', JSON.stringify(config.image_generation.model_parameters));
       }
+
+      // The prompt deliberately references @img1. AI33PRO binds that token to
+      // the first multipart `assets` file, so the reference image must travel
+      // with every generation request rather than merely being named in config.
+      const referencePath = path.resolve(process.cwd(), config.image_generation.reference_image);
+      if (!fs.existsSync(referencePath)) {
+        throw new Error(`Reference image not found: ${config.image_generation.reference_image}`);
+      }
+      const referenceBuffer = fs.readFileSync(referencePath);
+      const referenceBlob = new Blob([referenceBuffer], { type: 'image/png' });
+      formData.append('assets', referenceBlob, path.basename(referencePath));
 
       const response = await fetch('https://api.ai33.pro/v1i/task/generate-image', {
         method: 'POST',
@@ -43,7 +57,7 @@ export class ImageGeneratorService {
       const data = await response.json();
       const taskId = data.task_id;
       
-      UsageLogModel.log({
+      await UsageLogModel.log({
         provider: 'ai33pro',
         endpoint: '/v1i/task/generate-image',
         credit_cost: data.credit_cost || null,
@@ -51,27 +65,27 @@ export class ImageGeneratorService {
         error_msg: null
       });
 
-      const updatedItem = ContentItemModel.update(itemId, { ai33pro_task_id: taskId });
+      const updatedItem = await ContentItemModel.update(itemId, { ai33pro_task_id: taskId });
       if (updatedItem) eventBus.emit('content_item_updated', updatedItem);
       
       // Start polling asynchronously
-      setTimeout(() => this.pollTaskStatus(taskId, itemId), 3000);
+      setTimeout(() => this.pollTaskStatus(taskId, itemId), 15000);
 
     } catch (error: any) {
-       UsageLogModel.log({
+       await UsageLogModel.log({
         provider: 'ai33pro',
         endpoint: '/v1i/task/generate-image',
         credit_cost: null,
         success: 0,
         error_msg: error.message
       });
-      this.failItem(itemId, `Image Generation failed: ${error.message}`);
+      await this.failItem(itemId, `Image Generation failed: ${error.message}`);
     }
   }
 
   static async pollTaskStatus(taskId: string, itemId: string, attempts = 0): Promise<void> {
     if (attempts > 100) { // approx 5 mins if 3s apart
-      this.failItem(itemId, "Image Generation timed out");
+      await this.failItem(itemId, "Image Generation timed out");
       return;
     }
 
@@ -103,37 +117,44 @@ export class ImageGeneratorService {
         if (!imgResponse.ok) throw new Error('Failed to download image from result URL.');
         const imgBuffer = await imgResponse.arrayBuffer();
         
-        const dbPath = process.env.DATABASE_PATH || './data/content.db';
-        const dataDir = path.dirname(dbPath);
-        const imagePath = path.join(dataDir, 'images', `${taskId}.png`);
-        
-        fs.writeFileSync(imagePath, Buffer.from(imgBuffer));
+        const fileName = `${taskId}.png`;
+        const { data: uploadData, error: uploadError } = await supabase.storage.from('post-images').upload(fileName, imgBuffer, {
+          contentType: 'image/png',
+          upsert: true
+        });
 
-        const updatedItem = ContentItemModel.update(itemId, { 
-          status: 'preview_pending', 
-          image_local_path: imagePath 
+        if (uploadError) throw new Error(`Supabase Storage upload failed: ${uploadError.message}`);
+        
+        const { data: { publicUrl } } = supabase.storage.from('post-images').getPublicUrl(fileName);
+
+        const automation = getConfig().automation;
+        const updatedItem = await ContentItemModel.update(itemId, { 
+          status: automation.approval_mode === 'auto' ? 'preview_approved' : 'preview_pending', 
+          image_local_path: publicUrl 
         });
         if (updatedItem) eventBus.emit('content_item_updated', updatedItem);
+        if (updatedItem && automation.approval_mode === 'auto') await SchedulingService.scheduleAutomatic(itemId);
+        if (updatedItem && automation.approval_mode === 'telegram') void TelegramService.notifyStatusChange(updatedItem);
 
       } else if (data.status === 'failed' || data.status === 'error') {
         throw new Error(data.error || 'Task failed');
       } else {
         // still running or queued
-        setTimeout(() => this.pollTaskStatus(taskId, itemId, attempts + 1), 3000);
+        setTimeout(() => this.pollTaskStatus(taskId, itemId, attempts + 1), 15000);
       }
     } catch (error: any) {
-      this.failItem(itemId, `Polling failed: ${error.message}`);
+      await this.failItem(itemId, `Polling failed: ${error.message}`);
     }
   }
 
   static async regenerateImage(itemId: string): Promise<void> {
-    const item = ContentItemModel.update(itemId, { status: 'generating_image', image_local_path: null, ai33pro_task_id: null });
+    const item = await ContentItemModel.update(itemId, { status: 'generating_image', image_local_path: null, ai33pro_task_id: null });
     if (item) eventBus.emit('content_item_updated', item);
     await this.startImageGeneration(itemId);
   }
 
-  private static failItem(itemId: string, msg: string) {
-    const updated = ContentItemModel.update(itemId, { status: 'failed', error_message: msg });
+  private static async failItem(itemId: string, msg: string) {
+    const updated = await ContentItemModel.update(itemId, { status: 'failed', error_message: msg });
     if (updated) eventBus.emit('content_item_updated', updated);
   }
 }

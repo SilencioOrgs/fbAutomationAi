@@ -26,6 +26,13 @@ export interface AppConfig {
     required_columns: string[];
     active_file: string;
   };
+  telegram_sync_enabled: boolean;
+  automation: {
+    approval_mode: 'auto' | 'telegram';
+    schedule_mode: 'peak_hours' | 'fixed_daily_time';
+    daily_upload_time: string;
+    daily_upload_timezone: string;
+  };
   scheduling: {
     min_interval_minutes: number;
     max_posts_per_24h: number;

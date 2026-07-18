@@ -4,11 +4,11 @@ import eventBus from './PipelineEventBus';
 
 export class ContentGeneratorService {
   static async generateContent(itemId: string): Promise<void> {
-    const item = ContentItemModel.getById(itemId);
+    const item = await ContentItemModel.getById(itemId);
     if (!item) return;
 
     // Update status to generating_content
-    let updatedItem = ContentItemModel.update(itemId, { status: 'generating_content' });
+    let updatedItem = await ContentItemModel.update(itemId, { status: 'generating_content' });
     if (updatedItem) eventBus.emit('content_item_updated', updatedItem);
 
     try {
@@ -35,12 +35,12 @@ export class ContentGeneratorService {
         category: item.category
       };
 
-      const generatedTitle = interpolate(contentTemplates.title_template, context);
-      const generatedDescription = interpolate(contentTemplates.description_template, context);
-      const generatedHashtags = interpolate(contentTemplates.hashtags_template, context);
+      const generatedTitle = item.fb_title || interpolate(contentTemplates.title_template, context);
+      const generatedDescription = item.fb_description || interpolate(contentTemplates.description_template, context);
+      const generatedHashtags = item.fb_hashtags || interpolate(contentTemplates.hashtags_template, context);
       const imagePrompt = interpolate(imageTemplates.prompt_template, context);
 
-      updatedItem = ContentItemModel.update(itemId, {
+      updatedItem = await ContentItemModel.update(itemId, {
         generated_title: generatedTitle,
         generated_description: generatedDescription,
         generated_hashtags: generatedHashtags,
@@ -50,7 +50,7 @@ export class ContentGeneratorService {
 
       if (updatedItem) eventBus.emit('content_item_updated', updatedItem);
     } catch (error: any) {
-      const failedItem = ContentItemModel.update(itemId, { 
+      const failedItem = await ContentItemModel.update(itemId, { 
         status: 'failed', 
         error_message: `Content Generation failed: ${error.message}`
       });

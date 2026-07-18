@@ -31,6 +31,32 @@ export async function POST(request: Request) {
         const id = data.replace('regen_', '');
         await PreviewController.regenerateImage(id);
         await TelegramService.updateMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
+      } else if (data.startsWith('post_')) {
+        const id = data.replace('post_', '');
+        await TelegramService.handlePostCommand(id, chatId, messageId);
+      } else if (data.startsWith('models_')) {
+        const id = data.replace('models_', '');
+        await TelegramService.showModelSelection(id, chatId, messageId);
+      } else if (data.startsWith('setmod_')) {
+        const [id, ...modelParts] = data.replace('setmod_', '').split('_');
+        const modelId = modelParts.join('_');
+        await TelegramService.handleModelSelection(id, modelId, chatId, messageId);
+      } else if (data.startsWith('gcount_')) {
+        const count = parseInt(data.replace('gcount_', ''), 10);
+        await TelegramService.updateMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
+        await TelegramService.handleGenerateCommand(chatId, count, messageId);
+      }
+    } else if (payload.message?.text) {
+      const text = payload.message.text;
+      const chatId = payload.message.chat.id;
+      const match = text.match(/^\/generate\s+(\d+)$/i);
+      if (match) {
+        const count = parseInt(match[1], 10);
+        await TelegramService.handleGenerateCommand(chatId, count);
+      } else if (text.trim().toLowerCase() === '/generate') {
+        await TelegramService.showGenerateMenu(chatId);
+      } else {
+        await TelegramService.handleWebhook(payload);
       }
     } else {
       await TelegramService.handleWebhook(payload);

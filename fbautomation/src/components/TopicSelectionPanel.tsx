@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { TopicSourceRow } from '../lib/types';
 import { CheckSquare, Square, Upload } from 'lucide-react';
 
-export function TopicSelectionPanel() {
+export function TopicSelectionPanel({ plannedDate }: { plannedDate: string }) {
   const [topics, setTopics] = useState<TopicSourceRow[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -74,7 +74,7 @@ export function TopicSelectionPanel() {
       await fetch('/api/topics/select', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids })
+        body: JSON.stringify({ ids, plannedDate })
       });
       setTopics(topics.filter(t => !selectedIds.has(t.id)));
       setSelectedIds(new Set());
@@ -97,7 +97,7 @@ export function TopicSelectionPanel() {
   }
 
   return (
-    <div className="border-t border-[#333] bg-[#0a0a0a] flex flex-col max-h-[300px]">
+    <div className="rounded-xl border border-[#333] bg-[#0a0a0a] flex flex-col max-h-[500px]">
       <div className="p-3 border-b border-[#222] flex justify-between items-center bg-[#111]">
         <h4 className="text-sm font-semibold text-gray-200">Available Topics</h4>
         <div className="flex items-center gap-3"><span className="text-xs text-gray-500">{selectedIds.size} selected</span>{uploadControl}</div>
@@ -108,7 +108,7 @@ export function TopicSelectionPanel() {
           <div 
             key={topic.id}
             onClick={() => toggleSelect(topic.id)}
-            className={`flex items-center gap-3 p-2 rounded cursor-pointer transition-colors ${selectedIds.has(topic.id) ? 'bg-[#222]' : 'hover:bg-[#1a1a1a]'}`}
+            className={`flex items-center gap-3 border rounded-lg p-3 cursor-pointer transition-colors ${selectedIds.has(topic.id) ? 'bg-[#222] border-blue-700' : 'border-[#222] hover:bg-[#1a1a1a]'}`}
           >
             <div className="text-blue-500">
               {selectedIds.has(topic.id) ? <CheckSquare size={18} /> : <Square size={18} className="text-gray-500" />}
@@ -127,7 +127,7 @@ export function TopicSelectionPanel() {
           disabled={selectedIds.size === 0}
           className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-800 disabled:text-gray-500 text-white rounded-md text-sm font-medium transition-colors"
         >
-          Generate Selected
+          Start Automation
         </button>
       </div>
     </div>

@@ -7,6 +7,9 @@ export interface ContentItem {
   highlight_1: string;
   highlight_2: string;
   category: string;
+  fb_title: string | null;
+  fb_description: string | null;
+  fb_hashtags: string | null;
   status: string; // pending_approval, approved, generating_content, generating_image, preview_pending, scheduled, publishing, published, failed, rejected
   generated_title: string | null;
   generated_description: string | null;
@@ -18,6 +21,7 @@ export interface ContentItem {
   telegram_msg_id: string | null;
   telegram_chat_id: string | null;
   error_message: string | null;
+  planned_date: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -33,6 +37,9 @@ export interface TopicSourceRow {
   highlight_1: string;
   highlight_2: string;
   category: string;
+  fb_title: string | null;
+  fb_description: string | null;
+  fb_hashtags: string | null;
   consumed: number; // 0 or 1
   consumed_at: string | null;
   created_at: string;

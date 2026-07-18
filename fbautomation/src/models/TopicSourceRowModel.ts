@@ -1,75 +1,94 @@
-import { getDb } from './db';
+import { supabase } from '../lib/supabase';
 import { TopicSourceRow } from '../lib/types';
 import crypto from 'crypto';
 
 export class TopicSourceRowModel {
-  static getUnconsumed(limit: number, offset: number): TopicSourceRow[] {
-    const db = getDb();
-    return db.prepare('SELECT * FROM topic_source_rows WHERE consumed = 0 ORDER BY row_index ASC LIMIT ? OFFSET ?')
-             .all(limit, offset) as TopicSourceRow[];
-  }
-
-  static getByIds(ids: string[]): TopicSourceRow[] {
-    if (ids.length === 0) return [];
-    const db = getDb();
-    const placeholders = ids.map(() => '?').join(', ');
-    return db.prepare(`SELECT * FROM topic_source_rows WHERE id IN (${placeholders})`).all(...ids) as TopicSourceRow[];
-  }
-
-  static markConsumed(id: string): void {
-    const db = getDb();
-    db.prepare("UPDATE topic_source_rows SET consumed = 1, consumed_at = datetime('now') WHERE id = ?").run(id);
-  }
-
-  static hasUnconsumed(): boolean {
-    const db = getDb();
-    const row = db.prepare('SELECT 1 FROM topic_source_rows WHERE consumed = 0 LIMIT 1').get();
-    return !!row;
-  }
-
-  static isEmpty(): boolean {
-    const db = getDb();
-    return !db.prepare('SELECT 1 FROM topic_source_rows LIMIT 1').get();
-  }
-
-  static getSummary(): { activeFile: string | null; remaining: number } {
-    const db = getDb();
-    const active = db.prepare('SELECT file_name FROM topic_source_rows ORDER BY created_at DESC LIMIT 1').get() as { file_name: string } | undefined;
-    const remaining = (db.prepare('SELECT COUNT(*) AS count FROM topic_source_rows WHERE consumed = 0').get() as { count: number }).count;
-    return { activeFile: active?.file_name ?? null, remaining };
-  }
-
-  static clearAndInsert(fileName: string, rows: Omit<TopicSourceRow, 'id' | 'consumed' | 'consumed_at' | 'created_at'>[]): void {
-    const db = getDb();
+  static async getUnconsumed(limit: number, offset: number): Promise<TopicSourceRow[]> {
+    const { data, error } = await supabase
+      .from('topic_source_rows')
+      .select('*')
+      .eq('consumed', 0)
+      .order('row_index', { ascending: true })
+      .range(offset, offset + limit - 1);
     
-    const insertMany = db.transaction((items) => {
-      // Typically we'd clear the old table completely or keep history. The prompt implies "Excel file stays untouched, consumption tracked in DB".
-      // Let's assume we delete all unconsumed rows to replace with the new file's content, or just clear everything.
-      // Usually uploading a new file replaces the active pipeline topics. Let's delete all existing rows from the previous file to be safe.
-      db.prepare('DELETE FROM topic_source_rows').run();
+    if (error) return [];
+    return data || [];
+  }
 
-      const stmt = db.prepare(`
-        INSERT INTO topic_source_rows (id, file_name, row_index, topic, subject, headline, fact_text, highlight_1, highlight_2, category)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
+  static async getByIds(ids: string[]): Promise<TopicSourceRow[]> {
+    if (ids.length === 0) return [];
+    const { data, error } = await supabase
+      .from('topic_source_rows')
+      .select('*')
+      .in('id', ids);
+    if (error) return [];
+    return data || [];
+  }
 
-      for (const item of items) {
-        const id = crypto.randomUUID();
-        stmt.run(
-          id,
-          fileName,
-          item.row_index,
-          item.topic,
-          item.subject,
-          item.headline,
-          item.fact_text,
-          item.highlight_1,
-          item.highlight_2,
-          item.category
-        );
-      }
-    });
+  static async markConsumed(id: string): Promise<void> {
+    await supabase
+      .from('topic_source_rows')
+      .update({ consumed: 1, consumed_at: new Date().toISOString() })
+      .eq('id', id);
+  }
 
-    insertMany(rows);
+  static async hasUnconsumed(): Promise<boolean> {
+    const { data, error } = await supabase
+      .from('topic_source_rows')
+      .select('id')
+      .eq('consumed', 0)
+      .limit(1);
+    if (error) return false;
+    return data && data.length > 0;
+  }
+
+  static async isEmpty(): Promise<boolean> {
+    const { data, error } = await supabase
+      .from('topic_source_rows')
+      .select('id')
+      .limit(1);
+    if (error) return true;
+    return !data || data.length === 0;
+  }
+
+  static async getSummary(): Promise<{ activeFile: string | null; remaining: number }> {
+    const { data: activeData } = await supabase
+      .from('topic_source_rows')
+      .select('file_name')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    
+    const { count } = await supabase
+      .from('topic_source_rows')
+      .select('*', { count: 'exact', head: true })
+      .eq('consumed', 0);
+      
+    return { 
+      activeFile: activeData?.[0]?.file_name ?? null, 
+      remaining: count || 0 
+    };
+  }
+
+  static async clearAndInsert(fileName: string, rows: Omit<TopicSourceRow, 'id' | 'consumed' | 'consumed_at' | 'created_at'>[]): Promise<void> {
+    const { error: deleteError } = await supabase.from('topic_source_rows').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    if (deleteError) throw new Error(`Delete error: ${deleteError.message}`);
+
+    const insertPayload = rows.map(item => ({
+      file_name: fileName,
+      row_index: item.row_index,
+      topic: item.topic,
+      subject: item.subject,
+      headline: item.headline,
+      fact_text: item.fact_text,
+      highlight_1: item.highlight_1,
+      highlight_2: item.highlight_2,
+      category: item.category,
+      fb_title: item.fb_title,
+      fb_description: item.fb_description,
+      fb_hashtags: item.fb_hashtags
+    }));
+
+    const { error: insertError } = await supabase.from('topic_source_rows').insert(insertPayload);
+    if (insertError) throw new Error(`Insert error: ${insertError.message}`);
   }
 }

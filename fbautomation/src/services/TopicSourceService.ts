@@ -29,17 +29,20 @@ export class TopicSourceService {
       fact_text: String(row.Fact_Text || ''),
       highlight_1: String(row.Highlight_1 || ''),
       highlight_2: String(row.Highlight_2 || ''),
-      category: String(row.Category || '')
+      category: String(row.Category || ''),
+      fb_title: String(row.FB_Title || ''),
+      fb_description: String(row.FB_Description || ''),
+      fb_hashtags: String(row.FB_Hashtags || '')
     }));
 
-    TopicSourceRowModel.clearAndInsert(fileName, rowsToInsert);
+    await TopicSourceRowModel.clearAndInsert(fileName, rowsToInsert);
   }
 
-  static getAvailableTopics(page: number, pageSize: number): { topics: TopicSourceRow[], hasMore: boolean } {
+  static async getAvailableTopics(page: number, pageSize: number): Promise<{ topics: TopicSourceRow[], hasMore: boolean }> {
     const limit = pageSize;
     const offset = (page - 1) * pageSize;
     
-    const topics = TopicSourceRowModel.getUnconsumed(limit + 1, offset);
+    const topics = await TopicSourceRowModel.getUnconsumed(limit + 1, offset);
     const hasMore = topics.length > limit;
     
     return {
@@ -48,16 +51,16 @@ export class TopicSourceService {
     };
   }
 
-  static async consumeTopics(ids: string[]): Promise<ContentItem[]> {
-    const rows = TopicSourceRowModel.getByIds(ids);
+  static async consumeTopics(ids: string[], plannedDate?: string): Promise<ContentItem[]> {
+    const rows = await TopicSourceRowModel.getByIds(ids);
     const createdItems: ContentItem[] = [];
 
     for (const row of rows) {
       if (row.consumed) continue;
       
-      TopicSourceRowModel.markConsumed(row.id);
+      await TopicSourceRowModel.markConsumed(row.id);
       
-      const newItem = ContentItemModel.create({
+      const newItem = await ContentItemModel.create({
         id: crypto.randomUUID(),
         topic: row.topic,
         subject: row.subject,
@@ -66,7 +69,11 @@ export class TopicSourceService {
         highlight_1: row.highlight_1,
         highlight_2: row.highlight_2,
         category: row.category,
-        status: 'approved'
+        fb_title: row.fb_title,
+        fb_description: row.fb_description,
+        fb_hashtags: row.fb_hashtags,
+        status: 'approved',
+        planned_date: plannedDate || null
       });
       
       createdItems.push(newItem);
