@@ -17,7 +17,8 @@ export async function POST(request: Request) {
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const rows = xlsx.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' });
     const headers = (rows[0] ?? []).map(String);
-    const missing = getConfig().topic_source.required_columns.filter((column) => !headers.includes(column));
+    const config = await getConfig();
+    const missing = config.topic_source.required_columns.filter((column) => !headers.includes(column));
     if (missing.length) {
       return NextResponse.json({ error: `Invalid spreadsheet. Missing required columns: ${missing.join(', ')}` }, { status: 400 });
     }

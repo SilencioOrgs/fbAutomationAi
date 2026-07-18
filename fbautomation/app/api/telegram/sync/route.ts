@@ -9,7 +9,8 @@ export async function POST() {
   const webhook = `${baseUrl.replace(/\/$/, '')}/api/telegram/webhook`;
   const response = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: webhook, secret_token: process.env.TELEGRAM_WEBHOOK_SECRET }) });
   if (!response.ok) return NextResponse.json({ error: 'Telegram webhook registration failed.' }, { status: 502 });
-  if (!getConfig().telegram_sync_enabled) return NextResponse.json({ resent: 0, webhook });
+  const config = await getConfig();
+  if (!config.telegram_sync_enabled) return NextResponse.json({ resent: 0, webhook });
   const pending = await ContentItemModel.getByStatus('preview_pending');
   for (const item of pending) await TelegramService.sendPreview(item);
   return NextResponse.json({ resent: pending.length, webhook });

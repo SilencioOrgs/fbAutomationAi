@@ -81,9 +81,9 @@ export class TelegramService {
   }
 
   static async handleModelSelection(itemId: string, modelId: string, chatId: string, messageId: string): Promise<void> {
-    const config = getConfig();
+    const config = await getConfig();
     config.image_generation.model_id = modelId;
-    saveConfig(config);
+    await saveConfig(config);
 
     await this.updateMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
     await this.sendMessageToChat(chatId, `✅ Model changed to ${modelId}. Regenerating image...`);
@@ -133,7 +133,8 @@ export class TelegramService {
   }
 
   static async notifyStatusChange(item: ContentItem): Promise<void> {
-    if (!getConfig().telegram_sync_enabled) return;
+    const config = await getConfig();
+    if (!config.telegram_sync_enabled) return;
     if (item.status === 'preview_pending') {
       await this.sendPreview(item);
     } else if (item.status === 'failed') {
@@ -144,7 +145,8 @@ export class TelegramService {
   }
 
   static async sendPreview(item: ContentItem): Promise<void> {
-    if (!getConfig().telegram_sync_enabled) return;
+    const config = await getConfig();
+    if (!config.telegram_sync_enabled) return;
     const token = process.env.TELEGRAM_BOT_TOKEN;
     const adminId = process.env.TELEGRAM_ADMIN_ID;
     if (!token || !adminId || !item.image_local_path || !fs.existsSync(item.image_local_path)) return;

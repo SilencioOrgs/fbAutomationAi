@@ -12,7 +12,7 @@ export class ContentGeneratorService {
     if (updatedItem) eventBus.emit('content_item_updated', updatedItem);
 
     try {
-      const config = getConfig();
+      const config = await getConfig();
       const contentTemplates = config.content_generation;
       const imageTemplates = config.image_generation;
 

@@ -20,7 +20,7 @@ export class ImageGeneratorService {
     }
 
     try {
-      const config = getConfig();
+      const config = await getConfig();
       
       const formData = new FormData();
       formData.append('prompt', item.image_prompt);
@@ -127,7 +127,8 @@ export class ImageGeneratorService {
         
         const { data: { publicUrl } } = supabase.storage.from('post-images').getPublicUrl(fileName);
 
-        const automation = getConfig().automation;
+        const config = await getConfig();
+        const automation = config.automation;
         const updatedItem = await ContentItemModel.update(itemId, { 
           status: automation.approval_mode === 'auto' ? 'preview_approved' : 'preview_pending', 
           image_local_path: publicUrl 

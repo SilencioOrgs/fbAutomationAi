@@ -17,7 +17,7 @@ export class SchedulingService {
 
   static async scheduleAutomatic(itemId: string): Promise<void> {
     const item = await ContentItemModel.getById(itemId); if (!item) return;
-    const config = getConfig(); let time: Date;
+    const config = await getConfig(); let time: Date;
     if (config.automation.schedule_mode === 'fixed_daily_time') {
       const baseDate = item.planned_date || new Date().toISOString().slice(0, 10);
       time = this.fixedTimeForDay(baseDate, config.automation.daily_upload_time, config.automation.daily_upload_timezone);
@@ -35,7 +35,7 @@ export class SchedulingService {
   }
 
   static async suggestSlot(regionName: string): Promise<Date> {
-    const config = getConfig();
+    const config = await getConfig();
     const region = config.scheduling.regions[regionName];
     if (!region) throw new Error(`Region ${regionName} not found in config`);
 

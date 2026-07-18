@@ -15,12 +15,12 @@ export const metadata: Metadata = {
   description: "Content automation pipeline",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const config = getConfig();
+  const config = await getConfig();
   return (
     <html lang="en" className="dark">
       <body

@@ -21,7 +21,8 @@ function validConfig(config: AppConfig): string | null {
 }
 
 export async function GET() {
-  return NextResponse.json({ config: getConfig(), topicSource: TopicSourceRowModel.getSummary() });
+  const [config, topicSource] = await Promise.all([getConfig(), TopicSourceRowModel.getSummary()]);
+  return NextResponse.json({ config, topicSource });
 }
 
 export async function PATCH(request: Request) {
@@ -29,7 +30,7 @@ export async function PATCH(request: Request) {
     const config = await request.json() as AppConfig;
     const error = validConfig(config);
     if (error) return NextResponse.json({ error }, { status: 400 });
-    saveConfig(config);
+    await saveConfig(config);
     return NextResponse.json({ ok: true, config });
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'Invalid settings payload.' }, { status: 400 });

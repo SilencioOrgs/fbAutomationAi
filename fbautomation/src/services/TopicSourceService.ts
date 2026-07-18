@@ -12,7 +12,8 @@ export class TopicSourceService {
     const firstSheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[firstSheetName];
     
-    const requiredColumns = getConfig().topic_source.required_columns;
+    const config = await getConfig();
+    const requiredColumns = config.topic_source.required_columns;
     const data = xlsx.utils.sheet_to_json(worksheet, { defval: '' }) as any[];
     const headers = data.length > 0 ? Object.keys(data[0]) : [];
     const missingColumns = requiredColumns.filter((column) => !headers.includes(column));
