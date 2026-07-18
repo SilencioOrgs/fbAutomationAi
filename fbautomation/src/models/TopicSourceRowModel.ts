@@ -27,6 +27,18 @@ export class TopicSourceRowModel {
     return !!row;
   }
 
+  static isEmpty(): boolean {
+    const db = getDb();
+    return !db.prepare('SELECT 1 FROM topic_source_rows LIMIT 1').get();
+  }
+
+  static getSummary(): { activeFile: string | null; remaining: number } {
+    const db = getDb();
+    const active = db.prepare('SELECT file_name FROM topic_source_rows ORDER BY created_at DESC LIMIT 1').get() as { file_name: string } | undefined;
+    const remaining = (db.prepare('SELECT COUNT(*) AS count FROM topic_source_rows WHERE consumed = 0').get() as { count: number }).count;
+    return { activeFile: active?.file_name ?? null, remaining };
+  }
+
   static clearAndInsert(fileName: string, rows: Omit<TopicSourceRow, 'id' | 'consumed' | 'consumed_at' | 'created_at'>[]): void {
     const db = getDb();
     

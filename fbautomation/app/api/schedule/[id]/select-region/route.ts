@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { ScheduleController } from '../@/src/controllers/ScheduleController';
+import { ScheduleController } from '@/src/controllers/ScheduleController';
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   const params = await context.params;

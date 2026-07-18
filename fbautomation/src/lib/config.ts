@@ -22,6 +22,10 @@ export interface AppConfig {
     model_parameters: Record<string, any>;
     reference_image: string;
   };
+  topic_source: {
+    required_columns: string[];
+    active_file: string;
+  };
   scheduling: {
     min_interval_minutes: number;
     max_posts_per_24h: number;

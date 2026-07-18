@@ -91,10 +91,12 @@ export class ImageGeneratorService {
 
       const data = await response.json();
       
-      if (data.status === 'completed') {
-        const imageUrl = data.result?.images?.[0]?.url;
+      if (data.status === 'done') {
+        // Keep the raw completed response available in server logs while validating API payloads.
+        console.info('AI33PRO completed task response:', JSON.stringify(data));
+        const imageUrl = data.metadata?.image_url || data.metadata?.images?.[0]?.url || data.metadata?.output_url;
         if (!imageUrl) {
-          throw new Error('Completed but no image url returned.');
+          throw new Error('Task completed but metadata contained no supported image URL.');
         }
 
         const imgResponse = await fetch(imageUrl);
@@ -113,7 +115,7 @@ export class ImageGeneratorService {
         });
         if (updatedItem) eventBus.emit('content_item_updated', updatedItem);
 
-      } else if (data.status === 'failed') {
+      } else if (data.status === 'failed' || data.status === 'error') {
         throw new Error(data.error || 'Task failed');
       } else {
         // still running or queued

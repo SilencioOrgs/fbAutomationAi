@@ -1,6 +1,9 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { getConfig } from '../lib/config';
+import { TopicSourceRowModel } from './TopicSourceRowModel';
+import { TopicSourceService } from '../services/TopicSourceService';
 
 let dbInstance: Database.Database | null = null;
 
@@ -87,6 +90,16 @@ export function getDb(): Database.Database {
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // Seed only a genuinely new database. Uploaded files continue to replace rows explicitly.
+  if (TopicSourceRowModel.isEmpty()) {
+    const activeFile = getConfig().topic_source.active_file;
+    const sourcePath = path.resolve(process.cwd(), activeFile);
+    if (fs.existsSync(sourcePath)) {
+      void TopicSourceService.processUploadedFile(fs.readFileSync(sourcePath), activeFile)
+        .catch((error) => console.error('Initial topic source import failed:', error));
+    }
+  }
 
   return dbInstance;
 }

@@ -4,6 +4,7 @@ import { ContentItemModel } from '../models/ContentItemModel';
 import { TopicSourceRow, ContentItem } from '../lib/types';
 import eventBus from './PipelineEventBus';
 import crypto from 'crypto';
+import { getConfig } from '../lib/config';
 
 export class TopicSourceService {
   static async processUploadedFile(fileBuffer: Buffer, fileName: string): Promise<void> {
@@ -11,8 +12,13 @@ export class TopicSourceService {
     const firstSheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[firstSheetName];
     
-    // We expect headers: Topic, Subject, Headline, FactText, Highlight1, Highlight2, Category
+    const requiredColumns = getConfig().topic_source.required_columns;
     const data = xlsx.utils.sheet_to_json(worksheet, { defval: '' }) as any[];
+    const headers = data.length > 0 ? Object.keys(data[0]) : [];
+    const missingColumns = requiredColumns.filter((column) => !headers.includes(column));
+    if (missingColumns.length > 0) {
+      throw new Error(`Missing required columns: ${missingColumns.join(', ')}`);
+    }
     
     const rowsToInsert = data.map((row, index) => ({
       file_name: fileName,
@@ -20,9 +26,9 @@ export class TopicSourceService {
       topic: String(row.Topic || ''),
       subject: String(row.Subject || ''),
       headline: String(row.Headline || ''),
-      fact_text: String(row.FactText || ''),
-      highlight_1: String(row.Highlight1 || ''),
-      highlight_2: String(row.Highlight2 || ''),
+      fact_text: String(row.Fact_Text || ''),
+      highlight_1: String(row.Highlight_1 || ''),
+      highlight_2: String(row.Highlight_2 || ''),
       category: String(row.Category || '')
     }));
 

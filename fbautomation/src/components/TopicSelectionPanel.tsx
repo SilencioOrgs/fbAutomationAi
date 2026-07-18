@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { TopicSourceRow } from '../lib/types';
 import { CheckSquare, Square, Upload } from 'lucide-react';
 
@@ -9,6 +9,8 @@ export function TopicSelectionPanel() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [exhausted, setExhausted] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetchTopics();
@@ -20,6 +22,7 @@ export function TopicSelectionPanel() {
       const data = await res.json();
       if (data.topics && data.topics.length > 0) {
         setTopics(data.topics);
+        setExhausted(false);
       } else {
         setExhausted(true);
       }
@@ -29,6 +32,33 @@ export function TopicSelectionPanel() {
       setLoading(false);
     }
   };
+
+  const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      const response = await fetch('/api/topics/upload', { method: 'POST', body });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Upload failed.');
+      setSelectedIds(new Set());
+      await fetchTopics();
+    } catch (error: any) {
+      window.alert(error.message);
+    } finally {
+      setUploading(false);
+      event.target.value = '';
+    }
+  };
+
+  const uploadControl = <>
+    <input ref={fileInputRef} type="file" accept=".xlsx" className="hidden" onChange={handleUpload} />
+    <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-white rounded-md text-sm font-medium transition-colors">
+      <Upload size={16} /> {uploading ? 'Uploading…' : 'Upload New Topic File'}
+    </button>
+  </>;
 
   const toggleSelect = (id: string) => {
     const next = new Set(selectedIds);
@@ -61,9 +91,7 @@ export function TopicSelectionPanel() {
     return (
       <div className="p-6 border-t border-[#333] bg-[#0a0a0a] flex flex-col items-center justify-center gap-4">
         <p className="text-gray-400 text-sm">No more unconsumed topics available.</p>
-        <button className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-md text-sm font-medium transition-colors">
-          <Upload size={16} /> Upload New Topic File
-        </button>
+        {uploadControl}
       </div>
     );
   }
@@ -72,7 +100,7 @@ export function TopicSelectionPanel() {
     <div className="border-t border-[#333] bg-[#0a0a0a] flex flex-col max-h-[300px]">
       <div className="p-3 border-b border-[#222] flex justify-between items-center bg-[#111]">
         <h4 className="text-sm font-semibold text-gray-200">Available Topics</h4>
-        <span className="text-xs text-gray-500">{selectedIds.size} selected</span>
+        <div className="flex items-center gap-3"><span className="text-xs text-gray-500">{selectedIds.size} selected</span>{uploadControl}</div>
       </div>
       
       <div className="overflow-y-auto p-2 flex-1 space-y-1">

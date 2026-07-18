@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { PreviewController } from '../@/src/controllers/PreviewController';
+import { PreviewController } from '@/src/controllers/PreviewController';
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   const params = await context.params;

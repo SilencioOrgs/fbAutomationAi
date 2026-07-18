@@ -1,9 +1,11 @@
 import { TelegramStatusIndicator } from '@/src/components/TelegramStatusIndicator';
 import { UsageLogModel } from '@/src/models/UsageLogModel';
+import { getConfig } from '@/src/lib/config';
 
 export const dynamic = 'force-dynamic';
 
 export default function LogsPage() {
+  const config = getConfig();
   const telegramConnected = !!process.env.TELEGRAM_BOT_TOKEN;
   const recentLogs = UsageLogModel.getRecentLogs(100);
 
@@ -11,7 +13,7 @@ export default function LogsPage() {
     <main className="flex flex-col h-screen bg-black">
       <header className="h-14 border-b border-[#333] flex items-center justify-between px-6 bg-[#0a0a0a]">
         <div className="flex items-center gap-4">
-          <h1 className="text-lg font-semibold tracking-tight text-white">Pipeline Logs</h1>
+          <h1 className="text-lg font-semibold tracking-tight text-white">{config.branding.page_name} — Content Pipeline Logs</h1>
           <nav className="flex items-center gap-4 ml-6 text-sm">
             <a href="/" className="text-gray-500 hover:text-gray-300">Pipeline</a>
             <a href="/settings" className="text-gray-500 hover:text-gray-300">Settings</a>

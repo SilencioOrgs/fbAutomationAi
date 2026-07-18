@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { ContentItem } from '../lib/types';
-import { Check, X, RefreshCw, Edit2 } from 'lucide-react';
+import { Check, X, RefreshCw, Edit2, Share2, Camera } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
 
 interface Props {
@@ -16,6 +16,7 @@ interface Props {
 export function PostPreviewCard({ item, onApprove, onReject, onRegenerate, onUpdateCaption }: Props) {
   const [isEditing, setIsEditing] = useState(false);
   const [caption, setCaption] = useState(item.generated_description || '');
+  const [platform, setPlatform] = useState<'facebook' | 'instagram'>('facebook');
 
   const imageUrl = item.ai33pro_task_id ? `/api/images/${item.ai33pro_task_id}.png` : null;
 
@@ -25,7 +26,7 @@ export function PostPreviewCard({ item, onApprove, onReject, onRegenerate, onUpd
   };
 
   return (
-    <div className="bg-[#1a1a1a] rounded-xl border border-[#333] overflow-hidden flex flex-col sm:flex-row max-w-4xl mx-auto w-full mb-6">
+    <div className="bg-[#1a1a1a] rounded-xl border border-[#444] overflow-hidden flex flex-col sm:flex-row max-w-5xl mx-auto w-full mb-6 shadow-2xl">
       {/* Image Section */}
       <div className="w-full sm:w-1/2 bg-black flex items-center justify-center p-4 border-b sm:border-b-0 sm:border-r border-[#333]">
         {imageUrl ? (
@@ -41,7 +42,7 @@ export function PostPreviewCard({ item, onApprove, onReject, onRegenerate, onUpd
       {/* Content Section */}
       <div className="w-full sm:w-1/2 p-6 flex flex-col">
         <div className="flex justify-between items-start mb-4">
-          <h3 className="text-lg font-semibold text-gray-100">{item.generated_title || item.headline}</h3>
+          <div><div className="mb-2 flex gap-1"><button onClick={() => setPlatform('facebook')} className={`rounded px-2 py-1 text-xs ${platform === 'facebook' ? 'bg-white text-black' : 'text-gray-400'}`}><Share2 size={14} className="inline mr-1"/>Facebook</button><button onClick={() => setPlatform('instagram')} className={`rounded px-2 py-1 text-xs ${platform === 'instagram' ? 'bg-white text-black' : 'text-gray-400'}`}><Camera size={14} className="inline mr-1"/>Instagram</button></div><h3 className="text-lg font-semibold text-gray-100">{item.generated_title || item.headline}</h3></div>
           <StatusBadge status={item.status} />
         </div>
 
@@ -69,12 +70,12 @@ export function PostPreviewCard({ item, onApprove, onReject, onRegenerate, onUpd
             </button>
           ) : (
             <button onClick={() => setIsEditing(true)} className="flex items-center gap-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-md text-sm font-medium transition-colors">
-              <Edit2 size={16} /> Edit
+              <Edit2 size={16} /> Edit Caption
             </button>
           )}
 
           <button onClick={() => onRegenerate(item.id)} className="flex items-center gap-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-md text-sm font-medium transition-colors">
-            <RefreshCw size={16} /> Recreate
+            <RefreshCw size={16} /> Regenerate Image
           </button>
           <button onClick={() => onReject(item.id)} className="flex items-center gap-1 px-4 py-2 bg-red-900/50 hover:bg-red-800 text-red-300 rounded-md text-sm font-medium transition-colors border border-red-800">
             <X size={16} /> Reject

@@ -2,10 +2,12 @@ import { TelegramStatusIndicator } from '@/src/components/TelegramStatusIndicato
 import { ChatFeed } from '@/src/components/ChatFeed';
 import { TopicSelectionPanel } from '@/src/components/TopicSelectionPanel';
 import { ContentItemModel } from '@/src/models/ContentItemModel';
+import { getConfig } from '@/src/lib/config';
 
 export const dynamic = 'force-dynamic';
 
 export default async function Home() {
+  const config = getConfig();
   // Check telegram connection status
   const telegramConnected = !!process.env.TELEGRAM_BOT_TOKEN;
 
@@ -26,7 +28,7 @@ export default async function Home() {
       {/* Header Bar */}
       <header className="h-14 border-b border-[#333] flex items-center justify-between px-6 bg-[#0a0a0a]">
         <div className="flex items-center gap-4">
-          <h1 className="text-lg font-semibold tracking-tight text-white">Pipeline Pipeline</h1>
+          <h1 className="text-lg font-semibold tracking-tight text-white">{config.branding.page_name} — Content Pipeline</h1>
           <nav className="flex items-center gap-4 ml-6 text-sm">
             <a href="/" className="text-white">Pipeline</a>
             <a href="/settings" className="text-gray-500 hover:text-gray-300">Settings</a>
