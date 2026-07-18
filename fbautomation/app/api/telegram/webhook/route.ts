@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { TelegramService } from '@/src/services/TelegramService';
 import { PreviewController } from '@/src/controllers/PreviewController';
+import { ContentGeneratorService } from '@/src/services/ContentGeneratorService';
+import { ImageGeneratorService } from '@/src/services/ImageGeneratorService';
+import { ContentItemModel } from '@/src/models/ContentItemModel';
 
 export async function POST(request: Request) {
   const secretToken = request.headers.get('X-Telegram-Bot-Api-Secret-Token');
@@ -31,6 +34,22 @@ export async function POST(request: Request) {
         const id = data.replace('regen_', '');
         await PreviewController.regenerateImage(id);
         await TelegramService.updateMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
+      } else if (data.startsWith('gen_')) {
+        const id = data.replace('gen_', '');
+        await ContentItemModel.update(id, { status: 'approved' });
+        await TelegramService.editMessageText(chatId, messageId, "⏳ Generation started... This may take a minute.");
+        await TelegramService.updateMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
+        
+        // Kick off asynchronously
+        (async () => {
+          await ContentGeneratorService.generateContent(id);
+          await ImageGeneratorService.startImageGeneration(id);
+        })().catch(console.error);
+      } else if (data.startsWith('cancel_')) {
+        const id = data.replace('cancel_', '');
+        await ContentItemModel.update(id, { status: 'rejected' });
+        await TelegramService.editMessageText(chatId, messageId, "❌ Topic cancelled.");
+        await TelegramService.updateMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
       } else if (data.startsWith('post_')) {
         const id = data.replace('post_', '');
         await TelegramService.handlePostCommand(id, chatId, messageId);
@@ -53,7 +72,7 @@ export async function POST(request: Request) {
       if (match) {
         const count = parseInt(match[1], 10);
         await TelegramService.handleGenerateCommand(chatId, count);
-      } else if (text.trim().toLowerCase() === '/generate') {
+      } else if (text.trim().toLowerCase() === '/generate' || text.includes('Generate Topics')) {
         await TelegramService.showGenerateMenu(chatId);
       } else {
         await TelegramService.handleWebhook(payload);

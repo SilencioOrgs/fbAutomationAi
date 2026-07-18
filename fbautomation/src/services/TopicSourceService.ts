@@ -52,7 +52,7 @@ export class TopicSourceService {
     };
   }
 
-  static async consumeTopics(ids: string[], plannedDate?: string): Promise<ContentItem[]> {
+  static async consumeTopics(ids: string[], plannedDate?: string, initialStatus: string = 'approved'): Promise<ContentItem[]> {
     const rows = await TopicSourceRowModel.getByIds(ids);
     const createdItems: ContentItem[] = [];
 
@@ -72,8 +72,7 @@ export class TopicSourceService {
         category: row.category,
         fb_title: row.fb_title,
         fb_description: row.fb_description,
-        fb_hashtags: row.fb_hashtags,
-        status: 'approved',
+        status: initialStatus,
         planned_date: plannedDate || null
       });
       

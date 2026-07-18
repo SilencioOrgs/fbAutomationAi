@@ -37,11 +37,31 @@ export class TelegramService {
     }
     const ids = topics.map((t: any) => t.id);
     const today = new Date().toISOString().split('T')[0];
-    await TopicController.selectTopics(ids, today);
+    const { items } = await TopicController.selectTopics(ids, today, false, 'pending_approval');
+    
+    // 3. Send approval message for each selected topic
+    if (items) {
+      for (const item of items) {
+        await this.sendTopicApproval(item, chatId);
+      }
+    }
+  }
+
+  static async sendTopicApproval(item: ContentItem, chatId: string): Promise<void> {
+    const text = `📝 *Topic Selected*\n\n*Topic:* ${item.topic}\n*Headline:* ${item.headline}\n*Fact:* ${item.fact_text}`;
+    const replyMarkup = {
+      inline_keyboard: [
+        [
+          { text: '▶️ Generate Content', callback_data: `gen_${item.id}` },
+          { text: '❌ Cancel', callback_data: `cancel_${item.id}` }
+        ]
+      ]
+    };
+    await this.sendMessageToChatWithMarkup(chatId, text, replyMarkup, true);
   }
 
   static async showGenerateMenu(chatId: string): Promise<void> {
-    const keyboard = {
+    const reply_markup = {
       inline_keyboard: [
         [
           { text: '1️⃣', callback_data: 'gcount_1' },
@@ -51,7 +71,7 @@ export class TelegramService {
         ]
       ]
     };
-    await this.sendMessageToChatWithMarkup(chatId, "How many topics do you want to generate today?", keyboard);
+    await this.sendMessageToChatWithMarkup(chatId, "How many topics do you want to generate today?", reply_markup, false);
   }
 
   static async handlePostCommand(itemId: string, chatId: string, messageId: string): Promise<void> {
@@ -104,14 +124,17 @@ export class TelegramService {
     }
   }
 
-  static async sendMessageToChatWithMarkup(chatId: string, text: string, reply_markup: any): Promise<void> {
+  static async sendMessageToChatWithMarkup(chatId: string, text: string, reply_markup: any, useMarkdown: boolean = false): Promise<void> {
     const token = process.env.TELEGRAM_BOT_TOKEN;
     if (!token) return;
     try {
+      const body: any = { chat_id: chatId, text, reply_markup };
+      if (useMarkdown) body.parse_mode = 'Markdown';
+      
       await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, text, reply_markup })
+        body: JSON.stringify(body)
       });
     } catch (error) {
       console.error('Telegram sendMessageToChatWithMarkup error', error);
@@ -205,7 +228,15 @@ export class TelegramService {
       await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: adminId, text })
+        body: JSON.stringify({ 
+          chat_id: adminId, 
+          text,
+          reply_markup: {
+            keyboard: [[{ text: '🚀 Generate Topics' }]],
+            resize_keyboard: true,
+            is_persistent: true
+          }
+        })
       });
     } catch (error) {
       console.error('Telegram sendMessage error', error);
